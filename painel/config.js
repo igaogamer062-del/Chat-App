@@ -1,4 +1,4 @@
 window.PAINEL_CONFIG = {
-  url: 'https://lslwhvxrxzuobtmjqpfs.supabase.co',
-  key: 'sb_publishable_ua7hGNmWcLUWe7Vn1fEGhA_nMvcuKq5'
+  url: 'https://dyewxsxmqywhffvtnpzo.supabase.co',
+  key: 'sb_publishable_uyBWOV6S1Dh6J4ZUn3xy-Q_P4v4TJaW'
 };

@@ -92,7 +92,10 @@ begin
   return message_id;
 end;$$;
 
-create or replace function public.read_checklist_driver_messages(chat_session uuid,chat_token uuid)
+-- A versão 014 acrescenta a coluna attachment ao retorno. Ao reinstalar o
+-- projeto, remova qualquer assinatura anterior antes de criar a versão-base.
+drop function if exists public.read_checklist_driver_messages(uuid,uuid);
+create function public.read_checklist_driver_messages(chat_session uuid,chat_token uuid)
 returns table(id uuid,sender_type text,body text,created_at timestamptz)
 language sql security definer set search_path='public' as $$
   select m.id,m.sender_type,m.body,m.created_at from public.checklist_chat_messages_v2 m
