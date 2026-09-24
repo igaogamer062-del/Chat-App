@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Smart Chat · Painel</title>
+<link rel="stylesheet" href="app.css?v=1">
+</head>
+<body>
+<div id="toast" class="toast"></div>
+
+<section id="login-screen" class="login-screen">
+  <form id="login-form" class="login-card">
+    <h1>Smart Chat</h1>
+    <p>Painel de atendimento e gestão</p>
+    <label>E-mail<input type="email" id="login-email" required autocomplete="username"></label>
+    <label>Senha<input type="password" id="login-password" required autocomplete="current-password"></label>
+    <button class="primary" type="submit">Entrar</button>
+  </form>
+</section>
+
+<section id="app-screen" class="app-screen" hidden>
+  <header class="topbar">
+    <div class="brand">Smart Chat</div>
+    <nav id="tabs" class="tabs"></nav>
+    <div class="who">
+      <span id="who-name"></span>
+      <button id="logout" class="ghost">Sair</button>
+    </div>
+  </header>
+
+  <main id="view" class="view"></main>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js?v=1"></script>
+<script src="../js/checklist-media.js?v=300"></script>
+<script src="app.js?v=1"></script>
+</body>
+</html>

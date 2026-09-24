@@ -1,0 +1,7 @@
+project_id = "smart-chat"
+
+[functions.checklist-media]
+verify_jwt = false
+
+[functions.fleet-sheet-sync]
+verify_jwt = false
