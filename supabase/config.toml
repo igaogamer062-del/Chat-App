@@ -5,3 +5,9 @@ verify_jwt = false
 
 [functions.fleet-sheet-sync]
 verify_jwt = false
+
+[functions.admin-create-user]
+verify_jwt = false
+
+[functions.send-chat-push]
+verify_jwt = false
