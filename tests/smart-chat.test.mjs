@@ -81,3 +81,25 @@ test('management includes install guide, user chat toggle and history', () => {
   assert.match(panel, /admin_set_user_chat/);
   assert.match(panel, /admin-create-user/);
 });
+
+test('chat polling preserves typed text and the finish form', () => {
+  const panel = read('painel/app.js');
+  assert.match(panel, /setInterval\(\(\) => \{ loadQueue\(\); if \(selectedSession\) refreshThreadMessages/);
+  assert.match(panel, /body\.dataset\.signature === signature/);
+  assert.doesNotMatch(panel, /setInterval\(\(\) => \{ loadQueue\(\); if \(selectedSession\) loadThread/);
+});
+
+test('desktop Enter sends and mobile Enter keeps the multiline behavior', () => {
+  const driver = read('driver-app/app.js');
+  assert.match(driver, /pointer: coarse/);
+  assert.match(driver, /e\.key==='Enter'.*!mobileInput/);
+});
+
+test('operators receive a private dashboard and their own history', () => {
+  const panel = read('painel/app.js');
+  const sql = read('supabase/020_operator_dashboard.sql');
+  assert.match(panel, /operator_dashboard_metrics/);
+  assert.match(panel, /query = query\.eq\('operator_id', me\.id\)/);
+  assert.match(sql, /s\.operator_id=auth\.uid\(\)/);
+  assert.match(sql, /\('Operador','dashboard_view',true\)/);
+});

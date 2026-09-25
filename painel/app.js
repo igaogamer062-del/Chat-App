@@ -91,13 +91,21 @@
 
   function buildTabs() {
     const list = [];
-    if (perms.dashboard_view) list.push(['dashboard', 'Dashboard', '▦']);
-    if (me.chat_enabled && (perms.checklist_chat || perms.monitoring_chat)) list.push(['atendimentos', 'Atendimentos', '◫']);
-    if (me.access_role === 'Gestor') list.push(['historico', 'Histórico', '◷']);
-    if (perms.bases_admin || perms.base_operators_manage) list.push(['bases', 'Bases e transportadoras', '⌂']);
-    if (perms.users_manage) list.push(['usuarios', 'Usuários e acessos', '♙']);
-    list.push(['instalacao', 'Instalar aplicativo', '⇩']);
-    $('tabs').innerHTML = list.map(([id, label, icon]) => '<button data-tab="' + id + '"><span class="tab-icon">' + icon + '</span><span>' + label + '</span></button>').join('');
+    if (perms.dashboard_view || me.access_role === 'Operador') list.push(['dashboard', me.access_role === 'Gestor' ? 'Dashboard' : 'Meu dashboard']);
+    if (me.chat_enabled && (perms.checklist_chat || perms.monitoring_chat)) list.push(['atendimentos', 'Atendimentos']);
+    list.push(['historico', me.access_role === 'Gestor' ? 'Histórico' : 'Meu histórico']);
+    if (perms.bases_admin || perms.base_operators_manage) list.push(['bases', 'Bases e transportadoras']);
+    if (perms.users_manage) list.push(['usuarios', 'Usuários e acessos']);
+    list.push(['instalacao', 'Instalar aplicativo']);
+    const icons = {
+      dashboard: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
+      atendimentos: '<svg viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>',
+      historico: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+      bases: '<svg viewBox="0 0 24 24"><path d="M4 21V8l8-5 8 5v13M8 21v-7h8v7M8 9h.01M16 9h.01"/></svg>',
+      usuarios: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M17 11a4 4 0 0 1 5 4v3"/></svg>',
+      instalacao: '<svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>'
+    };
+    $('tabs').innerHTML = list.map(([id, label]) => '<button data-tab="' + id + '"><span class="tab-icon">' + icons[id] + '</span><span>' + label + '</span></button>').join('');
     $('tabs').querySelectorAll('button').forEach((b) => (b.onclick = () => goTo(b.dataset.tab)));
     goTo(list[0] ? list[0][0] : '');
   }
@@ -121,13 +129,13 @@
   let selectedSession = null;
   async function renderAtendimentos() {
     $('view').innerHTML =
-      '<div class="page-head"><div><span class="page-kicker">ATENDIMENTO</span><h1>Conversas em andamento</h1><p>Solicitações encaminhadas para você conforme as bases vinculadas.</p></div></div>' +
       '<div class="queue">' +
-      '<div class="queue-list" id="queue-list"><div class="queue-empty">Carregando…</div></div>' +
+      '<div class="queue-list-wrap"><div class="queue-list-head"><span>CONVERSAS</span><h2>Atendimentos</h2></div><div class="queue-list" id="queue-list"><div class="queue-empty">Carregando…</div></div></div>' +
       '<div class="thread" id="thread"><div class="queue-empty">Selecione um atendimento na lista ao lado.</div></div>' +
+      '<aside class="conversation-details" id="conversation-details"><div class="details-empty">Os dados do atendimento aparecerão aqui.</div></aside>' +
       '</div>';
     await loadQueue();
-    queuePoll = setInterval(() => { loadQueue(); if (selectedSession) loadThread(selectedSession.id); }, 4000);
+    queuePoll = setInterval(() => { loadQueue(); if (selectedSession) refreshThreadMessages(selectedSession.id); }, 4000);
   }
 
   async function loadQueue() {
@@ -160,29 +168,39 @@
     if (!session) return;
     selectedSession = session;
     loadQueue();
+    renderSessionDetails(session);
     loadThread(session.id);
+  }
+
+  function renderSessionDetails(s) {
+    const panel = $('conversation-details');
+    if (!panel) return;
+    const initials = String(s.driver_name || 'C').trim().split(/\s+/).slice(0, 2).map((part) => part.charAt(0)).join('').toUpperCase();
+    panel.innerHTML =
+      '<div class="details-title">Informações</div>' +
+      '<div class="details-profile"><div class="details-avatar">' + esc(initials) + '</div><div><b>' + esc(s.driver_name || 'Condutor') + '</b><span>' + esc(s.vehicle_plate || 'Sem placa') + '</span></div></div>' +
+      '<div class="details-card"><span>Tipo de atendimento</span><b>' + (s.service_type === 'monitoring' ? 'Monitoramento' : 'Checklist') + '</b></div>' +
+      '<div class="details-card"><span>Tecnologia</span><b>' + esc(s.technology || 'Não informada') + '</b></div>' +
+      '<div class="details-card"><span>Iniciado em</span><b>' + new Date(s.created_at).toLocaleString('pt-BR') + '</b></div>' +
+      '<div class="details-card"><span>Situação</span><b class="online-label"><i></i>Em atendimento</b></div>';
   }
 
   async function loadThread(sessionId) {
     const s = selectedSession;
     if (!s || s.id !== sessionId) return;
-    const msgs = await call(sb.from('checklist_chat_messages_v2').select('*').eq('session_id', sessionId).order('created_at'));
     const box = $('thread');
     if (!box) return;
+    if (box.dataset.sessionId === sessionId) {
+      await refreshThreadMessages(sessionId);
+      return;
+    }
+    box.dataset.sessionId = sessionId;
     box.innerHTML =
-      '<div class="thread-head"><div><h3>' + esc(s.driver_name) + '</h3><small>' + esc(s.vehicle_plate) + ' · ' + esc(s.technology || '') + '</small></div>' +
+      '<div class="thread-head"><div class="thread-person"><div class="thread-avatar">' + esc(String(s.driver_name || 'C').trim().charAt(0).toUpperCase()) + '</div><div><h3>' + esc(s.driver_name) + '</h3><small>' + esc(s.vehicle_plate) + ' · ' + esc(s.technology || '') + '</small></div></div>' +
       '<button class="btn small" id="finish-btn">Encerrar atendimento</button></div>' +
       '<div class="thread-body" id="thread-body"></div>' +
-      '<form class="thread-foot" id="thread-form"><textarea id="thread-input" placeholder="Escreva uma mensagem…"></textarea><button class="btn primary" type="submit">Enviar</button></form>' +
+      '<form class="thread-foot" id="thread-form"><textarea id="thread-input" rows="1" placeholder="Digite sua mensagem…"></textarea><button class="send-button" type="submit" aria-label="Enviar mensagem"><svg viewBox="0 0 24 24"><path d="m3 3 18 9-18 9 3-9-3-9Z"/><path d="M6 12h15"/></svg></button></form>' +
       '<div id="finish-panel" class="finish-panel" hidden></div>';
-    const body = $('thread-body');
-    body.innerHTML = msgs.map((m) => '<div class="msg ' + (m.sender_type === 'operator' ? 'mine' : m.sender_type === 'bot' ? 'bot' : '') + '" data-message-id="' + m.id + '"><p style="margin:0;white-space:pre-wrap">' + esc(m.body) + '</p><time>' + new Date(m.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) + '</time></div>').join('') || '<div class="queue-empty">Nenhuma mensagem ainda.</div>';
-    msgs.forEach((message) => {
-      if (!message.attachment) return;
-      const host = body.querySelector('[data-message-id="' + CSS.escape(message.id) + '"]');
-      if (host && window.ChecklistMedia) ChecklistMedia.render(host, message.attachment, { local: false, client: sb, sessionId: s.id, token: null });
-    });
-    body.scrollTop = body.scrollHeight;
     $('thread-form').onsubmit = async (e) => {
       e.preventDefault();
       const input = $('thread-input'), text = input.value.trim();
@@ -191,6 +209,28 @@
       try { await call(sb.from('checklist_chat_messages_v2').insert({ session_id: s.id, sender_type: 'operator', sender_id: me.id, body: text })); notifyDriver(s.id, text, me.full_name || 'Smart Chat'); await loadThread(s.id); } catch (e) {}
     };
     $('finish-btn').onclick = () => openFinishPanel(s);
+    await refreshThreadMessages(sessionId, true);
+  }
+
+  async function refreshThreadMessages(sessionId, force = false) {
+    const s = selectedSession;
+    const box = $('thread');
+    if (!s || s.id !== sessionId || !box || box.dataset.sessionId !== sessionId) return;
+    const msgs = await call(sb.from('checklist_chat_messages_v2').select('*').eq('session_id', sessionId).order('created_at'));
+    if (!selectedSession || selectedSession.id !== sessionId || box.dataset.sessionId !== sessionId) return;
+    const body = $('thread-body');
+    if (!body) return;
+    const signature = msgs.map((m) => m.id + ':' + m.created_at).join('|');
+    if (!force && body.dataset.signature === signature) return;
+    const stayAtBottom = force || body.scrollHeight - body.scrollTop - body.clientHeight < 120;
+    body.dataset.signature = signature;
+    body.innerHTML = msgs.map((m) => '<div class="msg ' + (m.sender_type === 'operator' ? 'mine' : m.sender_type === 'bot' ? 'bot' : '') + '" data-message-id="' + m.id + '"><p style="margin:0;white-space:pre-wrap">' + esc(m.body) + '</p><time>' + new Date(m.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) + '</time></div>').join('') || '<div class="queue-empty">Nenhuma mensagem ainda.</div>';
+    msgs.forEach((message) => {
+      if (!message.attachment) return;
+      const host = body.querySelector('[data-message-id="' + CSS.escape(message.id) + '"]');
+      if (host && window.ChecklistMedia) ChecklistMedia.render(host, message.attachment, { local: false, client: sb, sessionId: s.id, token: null });
+    });
+    if (stayAtBottom) body.scrollTop = body.scrollHeight;
   }
 
   function openFinishPanel(s) {
@@ -212,14 +252,21 @@
       $('finish-status').onchange = updateFinishFields;
       updateFinishFields();
       $('finish-confirm').onclick = async () => {
+        const button = $('finish-confirm');
         try {
           const status = $('finish-status').value;
           const items = $('finish-items').value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
           const scheduled = $('finish-schedule').value ? new Date($('finish-schedule').value).toISOString() : null;
-          await call(sb.rpc('finish_checklist_chat_complete', { chat_session: s.id, checklist_status: status, outcome_reason: $('finish-reason').value, failed_items: items, scheduled_for: scheduled }), 'Checklist encerrado.');
+          const reason = $('finish-reason').value.trim();
+          if (status !== 'Aprovado' && reason.length < 3) throw new Error('Informe o motivo com pelo menos 3 caracteres.');
+          if (status === 'Reprovado' && !items.length) throw new Error('Informe ao menos um acessório ou item reprovado.');
+          if (status === 'Reagendado' && (!scheduled || new Date(scheduled) <= new Date())) throw new Error('Informe uma data futura para o reagendamento.');
+          button.disabled = true;
+          await call(sb.rpc('finish_checklist_chat_complete', { chat_session: s.id, checklist_status: status, outcome_reason: reason, failed_items: items, scheduled_for: scheduled }), 'Checklist encerrado.');
           notifyDriver(s.id, 'Seu checklist foi finalizado. Consulte o resultado na aba Registros.');
-          selectedSession = null; $('thread').innerHTML = '<div class="queue-empty">Selecione um atendimento na lista ao lado.</div>'; await loadQueue();
-        } catch (e) {}
+          selectedSession = null; $('thread').removeAttribute('data-session-id'); $('thread').innerHTML = '<div class="queue-empty">Selecione um atendimento na lista ao lado.</div>'; $('conversation-details').innerHTML = '<div class="details-empty">Os dados do atendimento aparecerão aqui.</div>'; await loadQueue();
+        } catch (e) { toast(e.message || 'Não foi possível encerrar o atendimento.'); }
+        finally { if (button && document.body.contains(button)) button.disabled = false; }
       };
     } else {
       panel.innerHTML =
@@ -227,11 +274,14 @@
         '<div class="form-row"><label>Observação (opcional)</label><input id="finish-reason"></div>' +
         '<button class="btn primary" id="finish-confirm">Confirmar encerramento</button>';
       $('finish-confirm').onclick = async () => {
+        const button = $('finish-confirm');
         try {
+          button.disabled = true;
           await call(sb.rpc('finish_monitoring_chat', { chat_session: s.id, outcome: $('finish-status').value, note: $('finish-reason').value }), 'Atendimento encerrado.');
           notifyDriver(s.id, 'Seu atendimento de monitoramento foi finalizado.');
-          selectedSession = null; $('thread').innerHTML = '<div class="queue-empty">Selecione um atendimento na lista ao lado.</div>'; await loadQueue();
-        } catch (e) {}
+          selectedSession = null; $('thread').removeAttribute('data-session-id'); $('thread').innerHTML = '<div class="queue-empty">Selecione um atendimento na lista ao lado.</div>'; $('conversation-details').innerHTML = '<div class="details-empty">Os dados do atendimento aparecerão aqui.</div>'; await loadQueue();
+        } catch (e) { toast(e.message || 'Não foi possível encerrar o atendimento.'); }
+        finally { if (button && document.body.contains(button)) button.disabled = false; }
       };
     }
   }
@@ -243,7 +293,7 @@
     const today = new Date().toISOString().slice(0, 10);
     const weekAgo = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
     $('view').innerHTML =
-      '<div class="page-head"><div><span class="page-kicker">VISÃO GERAL</span><h1>Dashboard</h1><p>Acompanhe volume, tempo de atendimento e disponibilidade da equipe.</p></div></div>' +
+      '<div class="page-head"><div><span class="page-kicker">VISÃO GERAL</span><h1>' + (me.access_role === 'Gestor' ? 'Dashboard' : 'Meu dashboard') + '</h1><p>' + (me.access_role === 'Gestor' ? 'Acompanhe volume, tempo de atendimento e disponibilidade da equipe.' : 'Acompanhe seus atendimentos, resultados e tempo médio no período.') + '</p></div></div>' +
       '<div class="inline-form"><div class="form-row"><label>De</label><input type="date" id="dash-from" value="' + weekAgo + '"></div>' +
       '<div class="form-row"><label>Até</label><input type="date" id="dash-to" value="' + today + '"></div>' +
       '<button class="btn primary" id="dash-refresh">Atualizar</button></div>' +
@@ -253,7 +303,22 @@
   }
 
   async function loadDashboard() {
-    const d = await call(sb.rpc('dashboard_metrics', { date_from: $('dash-from').value, date_to: $('dash-to').value }));
+    const metricFunction = me.access_role === 'Gestor' ? 'dashboard_metrics' : 'operator_dashboard_metrics';
+    const d = await call(sb.rpc(metricFunction, { date_from: $('dash-from').value, date_to: $('dash-to').value }));
+    if (me.access_role === 'Operador') {
+      $('dash-body').innerHTML =
+        '<div class="grid cols-4" style="margin-bottom:14px">' +
+        kpi('Meus atendimentos', d.total_atendimentos) +
+        kpi('Em andamento', d.em_andamento) +
+        kpi('Finalizados', Math.max(0, Number(d.total_atendimentos) - Number(d.em_andamento))) +
+        kpi('Tempo médio', fmtDuration(d.tempo_medio_segundos)) +
+        '</div>' +
+        '<div class="grid cols-2">' +
+        '<div class="card"><h2>Meus atendimentos por base</h2>' + table(['Base', 'Total', 'Tempo médio'], d.por_base.map((r) => [r.base, r.total, fmtDuration(r.tempo_medio_segundos)])) + '</div>' +
+        '<div class="card"><h2>Tipos de atendimento</h2>' + table(['Tipo', 'Total'], [['Checklist', d.por_tipo.checklist], ['Monitoramento', d.por_tipo.monitoramento]]) + '</div>' +
+        '</div>';
+      return;
+    }
     $('dash-body').innerHTML =
       '<div class="grid cols-4" style="margin-bottom:14px">' +
       kpi('Total de atendimentos', d.total_atendimentos) +
@@ -279,19 +344,23 @@
   }
 
   // ============================================================
-  // HISTÓRICO GLOBAL PARA GESTORES
+  // HISTÓRICO GLOBAL PARA GESTORES E PRÓPRIO PARA OPERADORES
   // ============================================================
   async function renderHistorico() {
+    const manager = me.access_role === 'Gestor';
     $('view').innerHTML =
-      '<div class="page-head"><div><span class="page-kicker">GESTÃO</span><h1>Histórico de atendimentos</h1><p>Consulte os atendimentos de qualquer usuário, independentemente da base.</p></div></div>' +
-      '<div class="card"><div class="history-filter"><div class="form-row"><label>Operador</label><select id="history-user"><option value="">Todos os usuários</option></select></div>' +
+      '<div class="page-head"><div><span class="page-kicker">' + (manager ? 'GESTÃO' : 'MEUS RESULTADOS') + '</span><h1>' + (manager ? 'Histórico de atendimentos' : 'Meu histórico') + '</h1><p>' + (manager ? 'Consulte os atendimentos de qualquer usuário, independentemente da base.' : 'Consulte todos os atendimentos que você realizou.') + '</p></div></div>' +
+      '<div class="card"><div class="history-filter">' + (manager ? '<div class="form-row"><label>Operador</label><select id="history-user"><option value="">Todos os usuários</option></select></div>' : '') +
       '<div class="form-row"><label>Tipo</label><select id="history-type"><option value="">Todos</option><option value="checklist">Checklist</option><option value="monitoring">Monitoramento</option></select></div>' +
       '<button class="btn primary" id="history-filter">Filtrar</button></div><div id="history-body"><div class="empty-state">Carregando…</div></div></div>';
-    const profiles = await call(sb.from('profiles').select('id,full_name,username').order('full_name'));
-    $('history-user').innerHTML += profiles.map((p) => '<option value="' + p.id + '">' + esc(p.full_name || p.username) + '</option>').join('');
+    if (manager) {
+      const profiles = await call(sb.from('profiles').select('id,full_name,username').order('full_name'));
+      $('history-user').innerHTML += profiles.map((p) => '<option value="' + p.id + '">' + esc(p.full_name || p.username) + '</option>').join('');
+    }
     const load = async () => {
       let query = sb.from('checklist_chat_sessions').select('*,operator:profiles!checklist_chat_sessions_operator_id_fkey(full_name,username)').eq('active', false).order('finished_at', { ascending: false }).limit(300);
-      if ($('history-user').value) query = query.eq('operator_id', $('history-user').value);
+      if (!manager) query = query.eq('operator_id', me.id);
+      else if ($('history-user').value) query = query.eq('operator_id', $('history-user').value);
       if ($('history-type').value) query = query.eq('service_type', $('history-type').value);
       const rows = await call(query);
       $('history-body').innerHTML = table(
