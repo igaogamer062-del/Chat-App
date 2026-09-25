@@ -1,40 +1,62 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Smart Chat · Painel</title>
-<link rel="stylesheet" href="app.css?v=1">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#082c3c">
+  <title>Smart Chat · Central de atendimento</title>
+  <link rel="icon" href="../driver-app/icons/icon-192.png">
+  <link rel="stylesheet" href="app.css?v=4">
 </head>
 <body>
-<div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status"></div>
 
-<section id="login-screen" class="login-screen">
-  <form id="login-form" class="login-card">
-    <h1>Smart Chat</h1>
-    <p>Painel de atendimento e gestão</p>
-    <label>E-mail<input type="email" id="login-email" required autocomplete="username"></label>
-    <label>Senha<input type="password" id="login-password" required autocomplete="current-password"></label>
-    <button class="primary" type="submit">Entrar</button>
-  </form>
-</section>
-
-<section id="app-screen" class="app-screen" hidden>
-  <header class="topbar">
-    <div class="brand">Smart Chat</div>
-    <nav id="tabs" class="tabs"></nav>
-    <div class="who">
-      <span id="who-name"></span>
-      <button id="logout" class="ghost">Sair</button>
+  <section id="login-screen" class="login-screen">
+    <div class="login-brand">
+      <img src="../driver-app/icons/smart-risk.png" alt="">
+      <span>Smart Chat</span>
     </div>
-  </header>
+    <div class="login-layout">
+      <div class="login-copy">
+        <span class="overline">CENTRAL SMART RISK</span>
+        <h1>Atendimentos em um só lugar.</h1>
+        <p>Converse com condutores, acompanhe sua equipe e mantenha cada solicitação organizada.</p>
+        <div class="login-conversation" aria-hidden="true">
+          <div class="sample-avatar">CS</div>
+          <div><b>Condutor · ABC1D23</b><span>Preciso realizar um checklist.</span></div>
+          <i></i>
+        </div>
+      </div>
+      <form id="login-form" class="login-card">
+        <span class="overline">ACESSO DA EQUIPE</span>
+        <h2>Entre no Smart Chat</h2>
+        <p>Use o e-mail cadastrado pela gestão.</p>
+        <label>E-mail<input type="email" id="login-email" required autocomplete="username" placeholder="nome@empresa.com"></label>
+        <label>Senha<input type="password" id="login-password" required autocomplete="current-password" placeholder="Digite sua senha"></label>
+        <button class="btn primary login-submit" type="submit">Entrar no painel</button>
+        <small>Problemas com o acesso? Procure um gestor do Smart Chat.</small>
+      </form>
+    </div>
+    <div class="login-footer">Smart Risk · Comunicação operacional segura</div>
+  </section>
 
-  <main id="view" class="view"></main>
-</section>
+  <section id="app-screen" class="app-screen" hidden>
+    <aside class="sidebar">
+      <div class="brand"><img src="../driver-app/icons/smart-risk.png" alt=""><div><b>Smart Chat</b><span>Central de atendimento</span></div></div>
+      <nav id="tabs" class="tabs" aria-label="Navegação principal"></nav>
+      <div class="who">
+        <div class="who-avatar" id="who-avatar">U</div>
+        <div><b id="who-name"></b><span id="who-role"></span></div>
+        <button id="logout" class="icon-button" title="Sair" aria-label="Finalizar sessão">↪</button>
+      </div>
+    </aside>
+    <header class="mobile-topbar"><button id="mobile-menu" aria-label="Abrir menu">☰</button><b>Smart Chat</b></header>
+    <main id="view" class="view"></main>
+  </section>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="config.js?v=2"></script>
-<script src="../js/checklist-media.js?v=300"></script>
-<script src="app.js?v=1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js?v=2"></script>
+  <script src="../js/checklist-media.js?v=300"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

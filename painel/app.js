@@ -5,7 +5,7 @@
     document.body.innerHTML = '<main class="config-error"><h1>Smart Chat ainda não foi configurado</h1><p>Preencha a URL e a Publishable Key em <code>painel/config.js</code>.</p></main>';
     return;
   }
-  const sb = window.supabase.createClient(cfg.url, cfg.key);
+  const sb = window.supabase.createClient(cfg.url, cfg.key, { auth: { persistSession: true, autoRefreshToken: true } });
   const $ = (id) => document.getElementById(id);
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   let me = null; // { id, full_name, username, access_role }
@@ -42,6 +42,9 @@
     if (okMsg) toast(okMsg);
     return data;
   }
+  async function notifyDriver(sessionId, body, title = 'Smart Chat') {
+    try { await sb.functions.invoke('send-chat-push', { body: { session_id: sessionId, body, title } }); } catch (_) {}
+  }
 
   // ============================================================
   // LOGIN / SESSÃO
@@ -77,7 +80,9 @@
     perms = await call(sb.rpc('my_permissions'));
     $('login-screen').hidden = true;
     $('app-screen').hidden = false;
-    $('who-name').textContent = (me.full_name || me.username) + ' · ' + me.access_role;
+    $('who-name').textContent = me.full_name || me.username;
+    $('who-role').textContent = me.access_role;
+    $('who-avatar').textContent = (me.full_name || me.username || 'U').trim().charAt(0).toUpperCase();
     buildTabs();
     await sb.rpc('touch_presence');
     clearInterval(boot.heartbeat);
@@ -86,11 +91,13 @@
 
   function buildTabs() {
     const list = [];
-    if (perms.checklist_chat || perms.monitoring_chat || perms.base_operators_manage) list.push(['atendimentos', 'Atendimentos']);
-    if (perms.dashboard_view) list.push(['dashboard', 'Dashboard']);
-    if (perms.bases_admin || perms.base_operators_manage) list.push(['bases', 'Bases']);
-    if (perms.users_manage) list.push(['usuarios', 'Usuários']);
-    $('tabs').innerHTML = list.map(([id, label]) => '<button data-tab="' + id + '">' + label + '</button>').join('');
+    if (perms.dashboard_view) list.push(['dashboard', 'Dashboard', '▦']);
+    if (me.chat_enabled && (perms.checklist_chat || perms.monitoring_chat)) list.push(['atendimentos', 'Atendimentos', '◫']);
+    if (me.access_role === 'Gestor') list.push(['historico', 'Histórico', '◷']);
+    if (perms.bases_admin || perms.base_operators_manage) list.push(['bases', 'Bases e transportadoras', '⌂']);
+    if (perms.users_manage) list.push(['usuarios', 'Usuários e acessos', '♙']);
+    list.push(['instalacao', 'Instalar aplicativo', '⇩']);
+    $('tabs').innerHTML = list.map(([id, label, icon]) => '<button data-tab="' + id + '"><span class="tab-icon">' + icon + '</span><span>' + label + '</span></button>').join('');
     $('tabs').querySelectorAll('button').forEach((b) => (b.onclick = () => goTo(b.dataset.tab)));
     goTo(list[0] ? list[0][0] : '');
   }
@@ -101,8 +108,10 @@
     $('tabs').querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
     if (tab === 'atendimentos') renderAtendimentos();
     else if (tab === 'dashboard') renderDashboard();
+    else if (tab === 'historico') renderHistorico();
     else if (tab === 'bases') renderBases();
     else if (tab === 'usuarios') renderUsuarios();
+    else if (tab === 'instalacao') renderInstalacao();
     else $('view').innerHTML = '<div class="empty-state">Você não tem acesso a nenhuma área do painel ainda.</div>';
   }
 
@@ -112,6 +121,7 @@
   let selectedSession = null;
   async function renderAtendimentos() {
     $('view').innerHTML =
+      '<div class="page-head"><div><span class="page-kicker">ATENDIMENTO</span><h1>Conversas em andamento</h1><p>Solicitações encaminhadas para você conforme as bases vinculadas.</p></div></div>' +
       '<div class="queue">' +
       '<div class="queue-list" id="queue-list"><div class="queue-empty">Carregando…</div></div>' +
       '<div class="thread" id="thread"><div class="queue-empty">Selecione um atendimento na lista ao lado.</div></div>' +
@@ -136,10 +146,10 @@
       (isUnrouted ? '<div style="margin-top:6px"><span class="btn small primary" data-claim="' + s.id + '">Encaminhar ao operador</span></div>' : '') +
       '</button>';
     box.innerHTML =
-      '<div style="padding:10px 12px;font-size:11px;font-weight:800;color:var(--muted)">MEUS ATENDIMENTOS (' + mine.length + ')</div>' +
+      '<div class="queue-section-title">MEUS ATENDIMENTOS (' + mine.length + ')</div>' +
       (mine.length ? mine.map((s) => item(s, false)).join('') : '<div class="queue-empty">Nenhum atendimento ativo.</div>') +
       (perms.base_operators_manage
-        ? '<div style="padding:10px 12px;font-size:11px;font-weight:800;color:var(--muted)">NÃO ROTEADOS (' + unrouted.length + ')</div>' +
+        ? '<div class="queue-section-title">NÃO ROTEADOS (' + unrouted.length + ')</div>' +
           (unrouted.length ? unrouted.map((s) => item(s, true)).join('') : '<div class="queue-empty">Nenhum atendimento pendente de roteamento.</div>')
         : '');
     box.querySelectorAll('[data-id]').forEach((b) => (b.onclick = (ev) => { if (ev.target.closest('[data-claim]')) return; openSession([...mine, ...unrouted].find((s) => s.id === b.dataset.id)); }));
@@ -164,7 +174,7 @@
       '<button class="btn small" id="finish-btn">Encerrar atendimento</button></div>' +
       '<div class="thread-body" id="thread-body"></div>' +
       '<form class="thread-foot" id="thread-form"><textarea id="thread-input" placeholder="Escreva uma mensagem…"></textarea><button class="btn primary" type="submit">Enviar</button></form>' +
-      '<div id="finish-panel" hidden style="padding:12px;border-top:1px solid var(--line)"></div>';
+      '<div id="finish-panel" class="finish-panel" hidden></div>';
     const body = $('thread-body');
     body.innerHTML = msgs.map((m) => '<div class="msg ' + (m.sender_type === 'operator' ? 'mine' : m.sender_type === 'bot' ? 'bot' : '') + '" data-message-id="' + m.id + '"><p style="margin:0;white-space:pre-wrap">' + esc(m.body) + '</p><time>' + new Date(m.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) + '</time></div>').join('') || '<div class="queue-empty">Nenhuma mensagem ainda.</div>';
     msgs.forEach((message) => {
@@ -178,7 +188,7 @@
       const input = $('thread-input'), text = input.value.trim();
       if (!text) return;
       input.value = '';
-      try { await call(sb.from('checklist_chat_messages_v2').insert({ session_id: s.id, sender_type: 'operator', sender_id: me.id, body: text })); await loadThread(s.id); } catch (e) {}
+      try { await call(sb.from('checklist_chat_messages_v2').insert({ session_id: s.id, sender_type: 'operator', sender_id: me.id, body: text })); notifyDriver(s.id, text, me.full_name || 'Smart Chat'); await loadThread(s.id); } catch (e) {}
     };
     $('finish-btn').onclick = () => openFinishPanel(s);
   }
@@ -207,6 +217,7 @@
           const items = $('finish-items').value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
           const scheduled = $('finish-schedule').value ? new Date($('finish-schedule').value).toISOString() : null;
           await call(sb.rpc('finish_checklist_chat_complete', { chat_session: s.id, checklist_status: status, outcome_reason: $('finish-reason').value, failed_items: items, scheduled_for: scheduled }), 'Checklist encerrado.');
+          notifyDriver(s.id, 'Seu checklist foi finalizado. Consulte o resultado na aba Registros.');
           selectedSession = null; $('thread').innerHTML = '<div class="queue-empty">Selecione um atendimento na lista ao lado.</div>'; await loadQueue();
         } catch (e) {}
       };
@@ -218,6 +229,7 @@
       $('finish-confirm').onclick = async () => {
         try {
           await call(sb.rpc('finish_monitoring_chat', { chat_session: s.id, outcome: $('finish-status').value, note: $('finish-reason').value }), 'Atendimento encerrado.');
+          notifyDriver(s.id, 'Seu atendimento de monitoramento foi finalizado.');
           selectedSession = null; $('thread').innerHTML = '<div class="queue-empty">Selecione um atendimento na lista ao lado.</div>'; await loadQueue();
         } catch (e) {}
       };
@@ -231,6 +243,7 @@
     const today = new Date().toISOString().slice(0, 10);
     const weekAgo = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
     $('view').innerHTML =
+      '<div class="page-head"><div><span class="page-kicker">VISÃO GERAL</span><h1>Dashboard</h1><p>Acompanhe volume, tempo de atendimento e disponibilidade da equipe.</p></div></div>' +
       '<div class="inline-form"><div class="form-row"><label>De</label><input type="date" id="dash-from" value="' + weekAgo + '"></div>' +
       '<div class="form-row"><label>Até</label><input type="date" id="dash-to" value="' + today + '"></div>' +
       '<button class="btn primary" id="dash-refresh">Atualizar</button></div>' +
@@ -266,6 +279,58 @@
   }
 
   // ============================================================
+  // HISTÓRICO GLOBAL PARA GESTORES
+  // ============================================================
+  async function renderHistorico() {
+    $('view').innerHTML =
+      '<div class="page-head"><div><span class="page-kicker">GESTÃO</span><h1>Histórico de atendimentos</h1><p>Consulte os atendimentos de qualquer usuário, independentemente da base.</p></div></div>' +
+      '<div class="card"><div class="history-filter"><div class="form-row"><label>Operador</label><select id="history-user"><option value="">Todos os usuários</option></select></div>' +
+      '<div class="form-row"><label>Tipo</label><select id="history-type"><option value="">Todos</option><option value="checklist">Checklist</option><option value="monitoring">Monitoramento</option></select></div>' +
+      '<button class="btn primary" id="history-filter">Filtrar</button></div><div id="history-body"><div class="empty-state">Carregando…</div></div></div>';
+    const profiles = await call(sb.from('profiles').select('id,full_name,username').order('full_name'));
+    $('history-user').innerHTML += profiles.map((p) => '<option value="' + p.id + '">' + esc(p.full_name || p.username) + '</option>').join('');
+    const load = async () => {
+      let query = sb.from('checklist_chat_sessions').select('*,operator:profiles!checklist_chat_sessions_operator_id_fkey(full_name,username)').eq('active', false).order('finished_at', { ascending: false }).limit(300);
+      if ($('history-user').value) query = query.eq('operator_id', $('history-user').value);
+      if ($('history-type').value) query = query.eq('service_type', $('history-type').value);
+      const rows = await call(query);
+      $('history-body').innerHTML = table(
+        ['Data', 'Condutor', 'Placa', 'Tipo', 'Resultado', 'Responsável'],
+        rows.map((s) => [
+          s.finished_at ? new Date(s.finished_at).toLocaleString('pt-BR') : '—',
+          s.driver_name,
+          s.vehicle_plate,
+          s.service_type === 'monitoring' ? 'Monitoramento' : 'Checklist',
+          s.status || 'Concluído',
+          s.operator ? (s.operator.full_name || s.operator.username) : '—',
+        ])
+      );
+    };
+    $('history-filter').onclick = load;
+    await load();
+  }
+
+  // ============================================================
+  // INSTALAÇÃO DO PWA
+  // ============================================================
+  function renderInstalacao() {
+    const appUrl = new URL('../driver-app/', location.href).href;
+    $('view').innerHTML =
+      '<div class="page-head"><div><span class="page-kicker">APLICATIVO DO CONDUTOR</span><h1>Como instalar o Smart Chat</h1><p>Compartilhe o link abaixo. O condutor abre no celular e adiciona o aplicativo à tela inicial.</p></div></div>' +
+      '<div class="install-panel"><div class="card"><h2>Instalação no celular</h2><div class="install-steps">' +
+      '<div class="install-step"><div><b>Abra o link no celular</b><span>Use o Chrome no Android ou o Safari no iPhone.</span></div></div>' +
+      '<div class="install-step"><div><b>Abra o menu do navegador</b><span>No Android, toque nos três pontos. No iPhone, toque em Compartilhar.</span></div></div>' +
+      '<div class="install-step"><div><b>Instale na tela inicial</b><span>Escolha “Instalar aplicativo” ou “Adicionar à Tela de Início”.</span></div></div>' +
+      '<div class="install-step"><div><b>Entre uma única vez</b><span>O acesso ficará salvo neste aparelho até o condutor finalizar a sessão.</span></div></div>' +
+      '</div><div class="share-link"><input id="driver-link" readonly value="' + esc(appUrl) + '"><button class="btn primary" id="copy-driver-link">Copiar link</button><a class="btn" target="_blank" rel="noopener" href="' + esc(appUrl) + '">Abrir</a></div></div>' +
+      '<div class="phone-card"><img src="../driver-app/icons/smart-risk.png" alt=""><h3>Converse com a central pelo Smart Chat.</h3><p>Checklist e monitoramento com mensagens, áudio, imagens e documentos.</p><div class="phone-chat"><div class="phone-bubble">Olá! Como posso ajudar?</div><div class="phone-bubble mine">Preciso realizar um checklist.</div></div></div></div>';
+    $('copy-driver-link').onclick = async () => {
+      await navigator.clipboard.writeText(appUrl);
+      toast('Link do aplicativo copiado.');
+    };
+  }
+
+  // ============================================================
   // BASES (transportadoras, vínculos, planilha de teste)
   // ============================================================
   async function renderBases() {
@@ -277,35 +342,39 @@
       call(sb.from('base_operators').select('*')),
       call(sb.from('base_coordinators').select('*')),
       call(sb.from('mock_fleet_drivers').select('*').order('plate')),
-      call(sb.from('profiles').select('id,full_name,username,access_role').order('full_name')),
+      call(sb.from('profiles').select('id,full_name,username,access_role,chat_enabled,active').order('full_name')),
     ]);
     const baseName = (id) => (bases.find((b) => b.id === id) || {}).name || '—';
     const carrierName = (id) => (carriers.find((c) => c.id === id) || {}).name || '—';
     const profName = (id) => { const p = profiles.find((x) => x.id === id); return p ? p.full_name || p.username : '—'; };
     const canAdmin = !!perms.bases_admin;
-    const isAdminOrManager = me.access_role === 'Administrador' || me.access_role === 'Gerente';
+    const isAdminOrManager = false;
+    const activeBases = bases.filter((b) => b.active);
+    const activeCarriers = carriers.filter((c) => c.active);
+    const attendants = profiles.filter((p) => p.active && p.chat_enabled);
 
     $('view').innerHTML =
+      '<div class="page-head"><div><span class="page-kicker">CONFIGURAÇÃO OPERACIONAL</span><h1>Bases e transportadoras</h1><p>Defina quais usuários recebem Checklist ou Monitoramento em cada operação.</p></div></div>' +
       '<div class="grid cols-2">' +
       // Bases
       '<div class="card"><h2>Bases</h2>' +
       (canAdmin ? '<div class="inline-form"><div class="form-row"><label>Nova base</label><input id="new-base-name" placeholder="Ex.: Operação São Paulo"></div><button class="btn primary" id="add-base">Adicionar</button></div>' : '') +
-      table(['Base', 'Ativa'], bases.map((b) => [b.name, b.active ? 'Sim' : 'Não'])) + '</div>' +
+      '<table><thead><tr><th>Base</th><th>Status</th><th></th></tr></thead><tbody>' + bases.map((b) => '<tr><td>' + esc(b.name) + '</td><td><span class="status' + (b.active ? '' : ' off') + '">' + (b.active ? 'Ativa' : 'Excluída') + '</span></td><td class="row-actions">' + (canAdmin && b.name.toLowerCase() !== 'checklist' ? '<button class="btn small' + (b.active ? ' danger' : '') + '" data-base-active="' + b.id + '" data-next="' + (!b.active) + '">' + (b.active ? 'Excluir' : 'Reativar') + '</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' +
 
       // Transportadoras
       '<div class="card"><h2>Transportadoras</h2>' +
       (canAdmin ? '<div class="inline-form"><div class="form-row"><label>Nova transportadora</label><input id="new-carrier-name" placeholder="Ex.: TransBrasil"></div>' +
-        '<div class="form-row"><label>Base vinculada</label><select id="new-carrier-base"><option value="">Sem base</option>' + bases.map((b) => '<option value="' + b.id + '">' + esc(b.name) + '</option>').join('') + '</select></div>' +
+        '<div class="form-row"><label>Base vinculada</label><select id="new-carrier-base"><option value="">Sem base</option>' + activeBases.map((b) => '<option value="' + b.id + '">' + esc(b.name) + '</option>').join('') + '</select></div>' +
         '<button class="btn primary" id="add-carrier">Adicionar</button></div>' : '') +
-      table(['Transportadora', 'Base vinculada'], carriers.map((c) => [c.name, baseName((baseCarriers.find((bc) => bc.carrier_id === c.id) || {}).base_id)])) + '</div>' +
+      '<table><thead><tr><th>Transportadora</th><th>Base vinculada</th><th></th></tr></thead><tbody>' + carriers.map((c) => '<tr><td>' + esc(c.name) + '</td><td>' + esc(baseName((baseCarriers.find((bc) => bc.carrier_id === c.id) || {}).base_id)) + '</td><td class="row-actions">' + (canAdmin ? '<button class="btn small' + (c.active ? ' danger' : '') + '" data-carrier-active="' + c.id + '" data-next="' + (!c.active) + '">' + (c.active ? 'Excluir' : 'Reativar') + '</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' +
 
       // Vínculo de operadores por base (Coordenador consegue mexer aqui, escopado por RLS)
-      '<div class="card"><h2>Operadores por base (vínculo de operação)</h2>' +
-      (perms.base_operators_manage ? '<div class="inline-form"><div class="form-row"><label>Base</label><select id="op-base">' + bases.map((b) => '<option value="' + b.id + '">' + esc(b.name) + '</option>').join('') + '</select></div>' +
-        '<div class="form-row"><label>Operador</label><select id="op-user">' + profiles.map((p) => '<option value="' + p.id + '">' + esc(p.full_name || p.username) + '</option>').join('') + '</select></div>' +
+      '<div class="card"><h2>Atendentes por base</h2>' +
+      (perms.base_operators_manage ? '<div class="inline-form"><div class="form-row"><label>Base</label><select id="op-base">' + activeBases.map((b) => '<option value="' + b.id + '">' + esc(b.name) + '</option>').join('') + '</select></div>' +
+        '<div class="form-row"><label>Usuário com chat ativo</label><select id="op-user">' + attendants.map((p) => '<option value="' + p.id + '">' + esc(p.full_name || p.username) + ' · ' + esc(p.access_role) + '</option>').join('') + '</select></div>' +
         '<button class="btn primary" id="add-base-operator">Vincular</button></div>' : '') +
       '<div class="tag-row">' + baseOperators.map((bo) => '<span class="tag">' + esc(baseName(bo.base_id)) + ' · ' + esc(profName(bo.user_id)) + (perms.base_operators_manage ? ' <button data-remove-op="' + bo.id + '">×</button>' : '') + '</span>').join('') + '</div>' +
-      '<p style="color:var(--muted);font-size:11.5px;margin-top:10px">Só recebe atendimentos de Monitoramento quem também tiver a permissão "monitoring_chat" liberada na aba Usuários (individual) ou por função.</p></div>' +
+      '<p class="card-subtitle" style="margin-top:12px">Checklist é encaminhado apenas pela base Checklist. Monitoramento segue a base vinculada à transportadora do veículo.</p></div>' +
 
       // Coordenadores por base (só Admin/Gerente)
       (isAdminOrManager ? '<div class="card"><h2>Coordenadores por base</h2>' +
@@ -321,7 +390,7 @@
         '<div class="inline-form"><div class="form-row"><label>Placa</label><input id="fleet-plate" placeholder="ABC1D23"></div>' +
         '<div class="form-row"><label>Condutor</label><input id="fleet-driver"></div>' +
         '<div class="form-row"><label>Tecnologia</label><input id="fleet-tech"></div>' +
-        '<div class="form-row"><label>Transportadora</label><select id="fleet-carrier">' + carriers.map((c) => '<option value="' + c.id + '">' + esc(c.name) + '</option>').join('') + '</select></div>' +
+        '<div class="form-row"><label>Transportadora</label><select id="fleet-carrier">' + activeCarriers.map((c) => '<option value="' + c.id + '">' + esc(c.name) + '</option>').join('') + '</select></div>' +
         '<button class="btn primary" id="add-fleet">Adicionar linha</button></div>' +
         table(['Placa', 'Condutor', 'Tecnologia', 'Transportadora'], fleet.map((f) => [f.plate, f.driver_name, f.technology, carrierName(f.carrier_id)])) + '</div>' : '');
 
@@ -336,6 +405,8 @@
           renderBases();
         } catch (e) {}
       };
+      document.querySelectorAll('[data-base-active]').forEach((b) => (b.onclick = async () => { try { await call(sb.rpc('admin_set_base_active', { target_base: b.dataset.baseActive, is_active: b.dataset.next === 'true' }), b.dataset.next === 'true' ? 'Base reativada.' : 'Base excluída.'); renderBases(); } catch (e) {} }));
+      document.querySelectorAll('[data-carrier-active]').forEach((b) => (b.onclick = async () => { try { await call(sb.rpc('admin_set_carrier_active', { target_carrier: b.dataset.carrierActive, is_active: b.dataset.next === 'true' }), b.dataset.next === 'true' ? 'Transportadora reativada.' : 'Transportadora excluída.'); renderBases(); } catch (e) {} }));
       $('add-fleet').onclick = async () => {
         const plate = $('fleet-plate').value.trim().toUpperCase().replace(/[-\s]/g, '');
         if (!/^[A-Z]{3}[0-9][A-Z0-9][0-9]{2}$/.test(plate)) { toast('Informe uma placa válida, como ABC1D23.'); return; }
@@ -391,25 +462,49 @@
   // ============================================================
   // USUÁRIOS / ACESSOS
   // ============================================================
-  const ROLES = ['Administrador', 'Gerente', 'Coordenador', 'Supervisor', 'Lider', 'Operador'];
+  const ROLES = ['Operador', 'Gestor'];
   async function renderUsuarios() {
     $('view').innerHTML = '<div class="empty-state">Carregando…</div>';
     const list = await call(sb.from('profiles').select('*').order('full_name'));
     $('view').innerHTML =
+      '<div class="page-head"><div><span class="page-kicker">ADMINISTRAÇÃO</span><h1>Usuários e acessos</h1><p>Crie acessos, escolha o perfil e defina quem participa da distribuição de chats.</p></div></div>' +
+      '<div class="card" style="margin-bottom:16px"><h2>Criar usuário</h2><div class="inline-form">' +
+      '<div class="form-row"><label>Nome completo</label><input id="user-name" autocomplete="off"></div>' +
+      '<div class="form-row"><label>E-mail</label><input id="user-email" type="email" autocomplete="off"></div>' +
+      '<div class="form-row"><label>Senha inicial</label><input id="user-password" type="password" minlength="8" autocomplete="new-password"></div>' +
+      '<div class="form-row"><label>Perfil</label><select id="user-role"><option>Operador</option><option>Gestor</option></select></div>' +
+      '<button class="btn primary" id="create-user">Criar usuário</button></div><p class="card-subtitle">O usuário poderá trocar a senha posteriormente pelo fluxo de recuperação do Supabase.</p></div>' +
       '<div class="card">' +
-      '<p style="color:var(--muted);font-size:12px;margin-top:0">Para cadastrar um novo usuário, crie o login em Authentication → Users no painel do Supabase; ele aparecerá aqui automaticamente para você definir a função e liberar os acessos.</p>' +
-      '<table><thead><tr><th>Nome</th><th>Usuário</th><th>Função</th><th>Ativo</th><th>Visto por último</th></tr></thead><tbody>' +
+      '<h2>Equipe cadastrada</h2><table><thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Recebe chats</th><th>Acesso</th><th>Visto por último</th></tr></thead><tbody>' +
       list.map((u) => '<tr>' +
         '<td>' + esc(u.full_name || '—') + '</td>' +
         '<td>' + esc(u.username || '—') + '</td>' +
         '<td><select data-role="' + u.id + '">' + ROLES.map((r) => '<option' + (r === u.access_role ? ' selected' : '') + '>' + r + '</option>').join('') + '</select></td>' +
+        '<td><input type="checkbox" data-chat="' + u.id + '"' + (u.chat_enabled ? ' checked' : '') + '></td>' +
         '<td><input type="checkbox" data-active="' + u.id + '"' + (u.active ? ' checked' : '') + '></td>' +
         '<td>' + (u.last_seen_at ? timeAgo(u.last_seen_at) + ' atrás' : '—') + '</td>' +
         '</tr>').join('') +
       '</tbody></table></div>';
+    $('create-user').onclick = async () => {
+      const button = $('create-user');
+      const payload = { full_name: $('user-name').value.trim(), email: $('user-email').value.trim(), password: $('user-password').value, access_role: $('user-role').value };
+      if (!payload.full_name || !payload.email || payload.password.length < 8) { toast('Preencha nome, e-mail e uma senha com pelo menos 8 caracteres.'); return; }
+      button.disabled = true;
+      try {
+        const { data, error } = await sb.functions.invoke('admin-create-user', { body: payload });
+        if (error) throw error;
+        if (data && data.error) throw new Error(data.error);
+        toast('Usuário criado.');
+        renderUsuarios();
+      } catch (error) { toast(error.message || 'Não foi possível criar o usuário.'); }
+      finally { button.disabled = false; }
+    };
     document.querySelectorAll('[data-role]').forEach((s) => (s.onchange = async () => { try { await call(sb.rpc('admin_set_user_role', { target_user: s.dataset.role, new_role: s.value }), 'Função atualizada.'); } catch (e) { renderUsuarios(); } }));
+    document.querySelectorAll('[data-chat]').forEach((c) => (c.onchange = async () => { try { await call(sb.rpc('admin_set_user_chat', { target_user: c.dataset.chat, is_enabled: c.checked }), c.checked ? 'Atendimento por chat ativado.' : 'Atendimento por chat desativado.'); } catch (e) { renderUsuarios(); } }));
     document.querySelectorAll('[data-active]').forEach((c) => (c.onchange = async () => { try { await call(sb.rpc('admin_set_user_active', { target_user: c.dataset.active, is_active: c.checked }), 'Acesso atualizado.'); } catch (e) { renderUsuarios(); } }));
   }
+
+  $('mobile-menu').onclick = () => document.querySelector('.sidebar').classList.toggle('open');
 
   // ============================================================
   boot();

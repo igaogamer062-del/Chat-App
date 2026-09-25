@@ -1,1 +1,4 @@
 supabase/.temp/
+supabase/.env*.local
+.env
+.env.local

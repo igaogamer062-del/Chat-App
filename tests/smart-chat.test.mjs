@@ -6,10 +6,9 @@ import path from 'node:path';
 const root = path.resolve(import.meta.dirname, '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
-test('GitHub Pages has a real entry page for both audiences', () => {
+test('GitHub Pages opens the staff login directly', () => {
   const html = read('index.html');
-  assert.match(html, /href="driver-app\/"/);
-  assert.match(html, /href="painel\/"/);
+  assert.match(html, /location\.replace\('painel\/'\)/);
   assert.doesNotMatch(html, /README\.md/);
 });
 
@@ -58,4 +57,27 @@ test('Google Sheets synchronization expects the supplied columns', () => {
 test('operator panel renders driver attachments', () => {
   assert.match(read('painel/index.html'), /checklist-media\.js/);
   assert.match(read('painel/app.js'), /ChecklistMedia\.render/);
+});
+
+test('PWA restores the driver session behind a native launch screen', () => {
+  assert.match(read('driver-app/index.html'), /id="launch-screen"/);
+  assert.match(read('driver-app/app.js'), /localStorage\.getItem\(SESSION\)/);
+  assert.match(read('driver-app/app.js'), /visibilitychange/);
+  assert.doesNotMatch(read('driver-app/index.html'), /id="install-settings"/);
+});
+
+test('routing is constrained by base and unavailable queues are rejected', () => {
+  const sql = read('supabase/019_smart_chat_roles_routing_admin.sql');
+  assert.match(sql, /lower\(name\)=lower\('Checklist'\)/);
+  assert.match(sql, /join public\.base_operators/);
+  assert.match(sql, /Não há atendentes disponíveis no momento/);
+  assert.match(sql, /access_role in \('Operador','Gestor'\)/);
+});
+
+test('management includes install guide, user chat toggle and history', () => {
+  const panel = read('painel/app.js');
+  assert.match(panel, /renderInstalacao/);
+  assert.match(panel, /renderHistorico/);
+  assert.match(panel, /admin_set_user_chat/);
+  assert.match(panel, /admin-create-user/);
 });
