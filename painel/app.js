@@ -13,6 +13,26 @@
   let tab = '';
   let queuePoll = null;
 
+  const themeIcons = {
+    dark: '<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg><span>Modo noturno</span>',
+    light: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><span>Modo diurno</span>'
+  };
+  function applyTheme(theme) {
+    const next = theme === 'light' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem('smart-chat-theme', next);
+    const action = next === 'dark' ? 'light' : 'dark';
+    ['theme-toggle','mobile-theme-toggle','login-theme-toggle'].forEach((id) => {
+      const button = $(id);
+      if (!button) return;
+      button.innerHTML = themeIcons[action];
+      button.title = action === 'light' ? 'Ativar modo diurno' : 'Ativar modo noturno';
+    });
+  }
+  function toggleTheme() { applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); }
+  ['theme-toggle','mobile-theme-toggle','login-theme-toggle'].forEach((id) => { const button = $(id); if (button) button.onclick = toggleTheme; });
+  applyTheme(document.documentElement.dataset.theme);
+
   function toast(msg) {
     const t = $('toast');
     t.textContent = msg;
@@ -92,18 +112,16 @@
   function buildTabs() {
     const list = [];
     if (perms.dashboard_view || me.access_role === 'Operador') list.push(['dashboard', me.access_role === 'Gestor' ? 'Dashboard' : 'Meu dashboard']);
-    if (me.chat_enabled && (perms.checklist_chat || perms.monitoring_chat)) list.push(['atendimentos', 'Atendimentos']);
+    if ((me.chat_enabled || me.access_role === 'Gestor') && (perms.checklist_chat || perms.monitoring_chat)) list.push(['atendimentos', 'Atendimentos']);
     list.push(['historico', me.access_role === 'Gestor' ? 'Histórico' : 'Meu histórico']);
     if (perms.bases_admin || perms.base_operators_manage) list.push(['bases', 'Bases e transportadoras']);
     if (perms.users_manage) list.push(['usuarios', 'Usuários e acessos']);
-    list.push(['instalacao', 'Instalar aplicativo']);
     const icons = {
       dashboard: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
       atendimentos: '<svg viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>',
       historico: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
       bases: '<svg viewBox="0 0 24 24"><path d="M4 21V8l8-5 8 5v13M8 21v-7h8v7M8 9h.01M16 9h.01"/></svg>',
       usuarios: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M17 11a4 4 0 0 1 5 4v3"/></svg>',
-      instalacao: '<svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>'
     };
     $('tabs').innerHTML = list.map(([id, label]) => '<button data-tab="' + id + '"><span class="tab-icon">' + icons[id] + '</span><span>' + label + '</span></button>').join('');
     $('tabs').querySelectorAll('button').forEach((b) => (b.onclick = () => goTo(b.dataset.tab)));
@@ -119,7 +137,6 @@
     else if (tab === 'historico') renderHistorico();
     else if (tab === 'bases') renderBases();
     else if (tab === 'usuarios') renderUsuarios();
-    else if (tab === 'instalacao') renderInstalacao();
     else $('view').innerHTML = '<div class="empty-state">Você não tem acesso a nenhuma área do painel ainda.</div>';
   }
 
@@ -139,29 +156,21 @@
   }
 
   async function loadQueue() {
-    const mine = await call(sb.from('checklist_chat_sessions').select('*').eq('operator_id', me.id).eq('active', true).order('updated_at', { ascending: false }));
-    let unrouted = [];
-    if (perms.base_operators_manage) {
-      unrouted = await call(sb.from('checklist_chat_sessions').select('*').is('operator_id', null).eq('active', true).order('created_at', { ascending: false }));
-    }
+    let activeQuery = sb.from('checklist_chat_sessions').select('*').eq('active', true).not('operator_id', 'is', null).order('updated_at', { ascending: false });
+    if (me.access_role !== 'Gestor') activeQuery = activeQuery.eq('operator_id', me.id);
+    const mine = await call(activeQuery);
     const box = $('queue-list');
     if (!box) return;
-    const item = (s, isUnrouted) =>
+    const item = (s) =>
       '<button class="queue-item' + (selectedSession && selectedSession.id === s.id ? ' selected' : '') + '" data-id="' + s.id + '">' +
       '<b>' + esc(s.driver_name) + '</b>' +
-      '<small>' + esc(s.vehicle_plate) + ' · <span class="pill ' + (s.service_type === 'monitoring' ? 'monitoring' : 'checklist') + '">' + (s.service_type === 'monitoring' ? 'Monitoramento' : 'Checklist') + '</span>' + (isUnrouted ? ' <span class="pill unrouted">Não roteado</span>' : '') + '</small>' +
+      '<small>' + esc(s.vehicle_plate) + ' · <span class="pill ' + (s.service_type === 'monitoring' ? 'monitoring' : 'checklist') + '">' + (s.service_type === 'monitoring' ? 'Monitoramento' : 'Checklist') + '</span></small>' +
       '<small>' + timeAgo(s.created_at) + ' atrás' + (s.routing_note ? ' · ' + esc(s.routing_note) : '') + '</small>' +
-      (isUnrouted ? '<div style="margin-top:6px"><span class="btn small primary" data-claim="' + s.id + '">Encaminhar ao operador</span></div>' : '') +
       '</button>';
     box.innerHTML =
-      '<div class="queue-section-title">MEUS ATENDIMENTOS (' + mine.length + ')</div>' +
-      (mine.length ? mine.map((s) => item(s, false)).join('') : '<div class="queue-empty">Nenhum atendimento ativo.</div>') +
-      (perms.base_operators_manage
-        ? '<div class="queue-section-title">NÃO ROTEADOS (' + unrouted.length + ')</div>' +
-          (unrouted.length ? unrouted.map((s) => item(s, true)).join('') : '<div class="queue-empty">Nenhum atendimento pendente de roteamento.</div>')
-        : '');
-    box.querySelectorAll('[data-id]').forEach((b) => (b.onclick = (ev) => { if (ev.target.closest('[data-claim]')) return; openSession([...mine, ...unrouted].find((s) => s.id === b.dataset.id)); }));
-    box.querySelectorAll('[data-claim]').forEach((b) => (b.onclick = async (ev) => { ev.stopPropagation(); try { await call(sb.rpc('claim_unrouted_session', { chat_session: b.dataset.claim }), 'Atendimento encaminhado ao operador disponível.'); await loadQueue(); } catch (e) {} }));
+      '<div class="queue-section-title">ATENDIMENTOS ATIVOS (' + mine.length + ')</div>' +
+      (mine.length ? mine.map(item).join('') : '<div class="queue-empty">Nenhum atendimento ativo.</div>');
+    box.querySelectorAll('[data-id]').forEach((b) => (b.onclick = () => openSession(mine.find((s) => s.id === b.dataset.id))));
   }
 
   function openSession(session) {
@@ -293,7 +302,7 @@
     const today = new Date().toISOString().slice(0, 10);
     const weekAgo = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
     $('view').innerHTML =
-      '<div class="page-head"><div><span class="page-kicker">VISÃO GERAL</span><h1>' + (me.access_role === 'Gestor' ? 'Dashboard' : 'Meu dashboard') + '</h1><p>' + (me.access_role === 'Gestor' ? 'Acompanhe volume, tempo de atendimento e disponibilidade da equipe.' : 'Acompanhe seus atendimentos, resultados e tempo médio no período.') + '</p></div></div>' +
+      '<div class="page-head dashboard-hero"><div><span class="live-badge"><i></i> OPERAÇÃO EM TEMPO REAL</span><h1>' + (me.access_role === 'Gestor' ? 'Dashboard de Atendimentos' : 'Meu dashboard') + '</h1><p>' + (me.access_role === 'Gestor' ? 'Visão geral das solicitações operacionais, produtividade e disponibilidade da equipe.' : 'Acompanhe seus atendimentos, resultados e tempo médio no período.') + '</p></div></div>' +
       '<div class="inline-form"><div class="form-row"><label>De</label><input type="date" id="dash-from" value="' + weekAgo + '"></div>' +
       '<div class="form-row"><label>Até</label><input type="date" id="dash-to" value="' + today + '"></div>' +
       '<button class="btn primary" id="dash-refresh">Atualizar</button></div>' +
@@ -377,26 +386,6 @@
     };
     $('history-filter').onclick = load;
     await load();
-  }
-
-  // ============================================================
-  // INSTALAÇÃO DO PWA
-  // ============================================================
-  function renderInstalacao() {
-    const appUrl = new URL('../driver-app/', location.href).href;
-    $('view').innerHTML =
-      '<div class="page-head"><div><span class="page-kicker">APLICATIVO DO CONDUTOR</span><h1>Como instalar o Smart Chat</h1><p>Compartilhe o link abaixo. O condutor abre no celular e adiciona o aplicativo à tela inicial.</p></div></div>' +
-      '<div class="install-panel"><div class="card"><h2>Instalação no celular</h2><div class="install-steps">' +
-      '<div class="install-step"><div><b>Abra o link no celular</b><span>Use o Chrome no Android ou o Safari no iPhone.</span></div></div>' +
-      '<div class="install-step"><div><b>Abra o menu do navegador</b><span>No Android, toque nos três pontos. No iPhone, toque em Compartilhar.</span></div></div>' +
-      '<div class="install-step"><div><b>Instale na tela inicial</b><span>Escolha “Instalar aplicativo” ou “Adicionar à Tela de Início”.</span></div></div>' +
-      '<div class="install-step"><div><b>Entre uma única vez</b><span>O acesso ficará salvo neste aparelho até o condutor finalizar a sessão.</span></div></div>' +
-      '</div><div class="share-link"><input id="driver-link" readonly value="' + esc(appUrl) + '"><button class="btn primary" id="copy-driver-link">Copiar link</button><a class="btn" target="_blank" rel="noopener" href="' + esc(appUrl) + '">Abrir</a></div></div>' +
-      '<div class="phone-card"><img src="../driver-app/icons/smart-risk.png" alt=""><h3>Converse com a central pelo Smart Chat.</h3><p>Checklist e monitoramento com mensagens, áudio, imagens e documentos.</p><div class="phone-chat"><div class="phone-bubble">Olá! Como posso ajudar?</div><div class="phone-bubble mine">Preciso realizar um checklist.</div></div></div></div>';
-    $('copy-driver-link').onclick = async () => {
-      await navigator.clipboard.writeText(appUrl);
-      toast('Link do aplicativo copiado.');
-    };
   }
 
   // ============================================================

@@ -37,14 +37,15 @@ test('the occurrence password SQL qualifies pgcrypto functions', () => {
   assert.match(sql, /extensions\.gen_salt/);
 });
 
-test('complete flows include rescheduling, rejection items and operator routing', () => {
+test('complete flows include rescheduling, rejection items and routed operator handling', () => {
   const sql = read('supabase/016_complete_service_flows.sql');
   assert.match(sql, /'Reagendado'/);
   assert.match(sql, /failed_items text\[\]/);
   assert.match(sql, /base_operators/);
   const panel = read('painel/app.js');
   assert.match(panel, /finish_checklist_chat_complete/);
-  assert.match(panel, /Encaminhar ao operador/);
+  assert.match(panel, /not\('operator_id', 'is', null\)/);
+  assert.doesNotMatch(panel, /Encaminhar ao operador/);
 });
 
 test('Google Sheets synchronization expects the supplied columns', () => {
@@ -74,12 +75,12 @@ test('routing is constrained by base and unavailable queues are rejected', () =>
   assert.match(sql, /access_role in \('Operador','Gestor'\)/);
 });
 
-test('management includes install guide, user chat toggle and history', () => {
+test('management includes user chat toggle and history without exposing the legacy PWA', () => {
   const panel = read('painel/app.js');
-  assert.match(panel, /renderInstalacao/);
   assert.match(panel, /renderHistorico/);
   assert.match(panel, /admin_set_user_chat/);
   assert.match(panel, /admin-create-user/);
+  assert.doesNotMatch(panel, /renderInstalacao|Instalar aplicativo/);
 });
 
 test('chat polling preserves typed text and the finish form', () => {
@@ -102,4 +103,32 @@ test('operators receive a private dashboard and their own history', () => {
   assert.match(panel, /query = query\.eq\('operator_id', me\.id\)/);
   assert.match(sql, /s\.operator_id=auth\.uid\(\)/);
   assert.match(sql, /\('Operador','dashboard_view',true\)/);
+});
+
+test('the whole staff panel supports persistent dark and light themes', () => {
+  const html = read('painel/index.html');
+  const panel = read('painel/app.js');
+  const css = read('painel/app.css');
+  assert.match(html, /smart-chat-theme/);
+  assert.match(panel, /function applyTheme/);
+  assert.match(css, /:root\[data-theme="dark"\]/);
+  assert.match(css, /:root\[data-theme="light"\]/);
+});
+
+test('unrouted conversations are not exposed in the staff chat queue', () => {
+  const panel = read('painel/app.js');
+  assert.doesNotMatch(panel, /NÃO ROTEADOS|data-claim|claim_unrouted_session/);
+  assert.match(panel, /not\('operator_id', 'is', null\)/);
+});
+
+test('mobile routing waits five minutes and retries every ten seconds', () => {
+  const sql = read('supabase/021_mobile_app_routing.sql');
+  assert.match(sql, /start_mobile_smart_chat/);
+  assert.match(sql, /Não encontrado registros as informações apresentadas/);
+  assert.match(sql, /Quer encerrar o atendimento ou aguardar 5 min até ser atendido\?/);
+  assert.match(sql, /interval '5 minutes'/);
+  assert.match(sql, /interval '10 seconds'/);
+  assert.match(sql, /smart-chat-waiting-router/);
+  assert.match(sql, /checklist_sessions_mobile_own_read/);
+  assert.match(sql, /driver_auth_user_id=auth\.uid\(\)/);
 });
