@@ -112,6 +112,29 @@ test('operators receive a private dashboard and their own history', () => {
   assert.match(sql, /\('Operador','dashboard_view',true\)/);
 });
 
+test('history opens the complete conversation with messages and attachments', () => {
+  const panel = read('painel/app.js');
+  assert.match(panel, /Ver conversa/);
+  assert.match(panel, /openHistoryConversation/);
+  assert.match(panel, /checklist_chat_messages_v2/);
+  assert.match(panel, /data-history-message/);
+  assert.match(panel, /ChecklistMedia\.render/);
+});
+
+test('Lovable driver API stays behind a Supabase Edge Function', () => {
+  const panel = read('painel/app.js');
+  const edge = read('supabase/functions/lovable-driver-sync/index.ts');
+  const sql = read('supabase/024_lovable_driver_integration.sql');
+  assert.match(panel, /functions\.invoke\('lovable-driver-sync'/);
+  assert.doesNotMatch(panel, /sr_live_|LOVABLE_API_KEY/);
+  assert.match(edge, /LOVABLE_API_BASE_URL/);
+  assert.match(edge, /LOVABLE_API_KEY/);
+  assert.match(edge, /x-api-key/);
+  assert.match(sql, /external_driver_directory/);
+  assert.match(sql, /lower\(regexp_replace\(trim\(d\.full_name\)/);
+  assert.doesNotMatch(sql, /mock_fleet_drivers f/);
+});
+
 test('the whole staff panel supports persistent dark and light themes', () => {
   const html = read('painel/index.html');
   const panel = read('painel/app.js');

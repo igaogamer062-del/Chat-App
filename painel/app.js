@@ -372,20 +372,41 @@
       else if ($('history-user').value) query = query.eq('operator_id', $('history-user').value);
       if ($('history-type').value) query = query.eq('service_type', $('history-type').value);
       const rows = await call(query);
-      $('history-body').innerHTML = table(
-        ['Data', 'Condutor', 'Placa', 'Tipo', 'Resultado', 'Responsável'],
-        rows.map((s) => [
-          s.finished_at ? new Date(s.finished_at).toLocaleString('pt-BR') : '—',
-          s.driver_name,
-          s.vehicle_plate,
-          s.service_type === 'monitoring' ? 'Monitoramento' : 'Checklist',
-          s.status || 'Concluído',
-          s.operator ? (s.operator.full_name || s.operator.username) : '—',
-        ])
-      );
+      $('history-body').innerHTML = rows.length ?
+        '<div class="history-table-wrap"><table><thead><tr><th>Data</th><th>Condutor</th><th>Placa</th><th>Tipo</th><th>Resultado</th><th>Responsável</th><th></th></tr></thead><tbody>' +
+        rows.map((s) => '<tr><td>' + esc(s.finished_at ? new Date(s.finished_at).toLocaleString('pt-BR') : '—') + '</td><td>' + esc(s.driver_name) + '</td><td>' + esc(s.vehicle_plate) + '</td><td>' + (s.service_type === 'monitoring' ? 'Monitoramento' : 'Checklist') + '</td><td>' + esc(s.status || 'Concluído') + '</td><td>' + esc(s.operator ? (s.operator.full_name || s.operator.username) : '—') + '</td><td><button class="btn small" data-history-session="' + s.id + '">Ver conversa</button></td></tr>').join('') +
+        '</tbody></table></div><div id="history-conversation"></div>' : '<div class="empty-state">Sem dados no período.</div>';
+      document.querySelectorAll('[data-history-session]').forEach((button) => {
+        button.onclick = () => openHistoryConversation(rows.find((session) => session.id === button.dataset.historySession));
+      });
     };
     $('history-filter').onclick = load;
     await load();
+  }
+
+  async function openHistoryConversation(session) {
+    if (!session) return;
+    const host = $('history-conversation');
+    if (!host) return;
+    host.innerHTML = '<div class="history-conversation"><div class="empty-state">Carregando conversa…</div></div>';
+    try {
+      const messages = await call(sb.from('checklist_chat_messages_v2').select('*').eq('session_id', session.id).order('created_at'));
+      const responsible = session.operator ? (session.operator.full_name || session.operator.username) : 'Sem responsável';
+      host.innerHTML =
+        '<section class="history-conversation" aria-label="Conversa do atendimento"><header><div><span class="page-kicker">CONVERSA COMPLETA</span><h2>' + esc(session.driver_name || 'Condutor') + '</h2><p>' + esc(session.vehicle_plate || 'Sem placa') + ' · ' + (session.service_type === 'monitoring' ? 'Monitoramento' : 'Checklist') + ' · ' + esc(responsible) + '</p></div><button class="btn small" id="close-history-conversation">Fechar</button></header>' +
+        '<div class="history-transcript" id="history-transcript">' +
+        (messages.length ? messages.map((message) => '<div class="msg ' + (message.sender_type === 'operator' ? 'mine' : message.sender_type === 'bot' ? 'bot' : '') + '" data-history-message="' + message.id + '"><span class="history-sender">' + (message.sender_type === 'operator' ? 'Operador' : message.sender_type === 'bot' ? 'Assistente' : 'Condutor') + '</span><p>' + esc(message.body) + '</p><time>' + new Date(message.created_at).toLocaleString('pt-BR') + '</time></div>').join('') : '<div class="empty-state">Nenhuma mensagem registrada neste atendimento.</div>') +
+        '</div></section>';
+      $('close-history-conversation').onclick = () => { host.innerHTML = ''; };
+      messages.forEach((message) => {
+        if (!message.attachment || !window.ChecklistMedia) return;
+        const messageHost = host.querySelector('[data-history-message="' + CSS.escape(message.id) + '"]');
+        if (messageHost) ChecklistMedia.render(messageHost, message.attachment, { local: false, client: sb, sessionId: session.id, token: null });
+      });
+      host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (error) {
+      host.innerHTML = '<div class="history-conversation"><div class="empty-state">Não foi possível carregar esta conversa.</div></div>';
+    }
   }
 
   // ============================================================
@@ -476,9 +497,26 @@
         '<button class="btn primary" id="add-base-coordinator">Vincular</button></div>' +
         '<div class="tag-row">' + coordinators.map((c) => '<span class="tag">' + esc(baseName(c.base_id)) + ' · ' + esc(profName(c.user_id)) + ' <button data-remove-co="' + c.id + '">×</button></span>').join('') + '</div></div>' : '') +
       '</div>' +
-      (canAdmin ? '<div class="card integration-card" style="margin-top:14px"><span class="page-kicker">FONTE DE CONDUTORES</span><h2>Integração com o sistema externo</h2><p>O Google Sheets foi removido deste fluxo. Os nomes dos condutores serão consultados pela API do sistema criado no Lovable. Placa e tecnologia continuarão sendo informadas pelo condutor para agilizar o atendimento.</p><div class="integration-state"><span class="status off">Aguardando configuração da API</span><small>Precisamos da URL base, autenticação, endpoint de condutores, paginação e exemplo da resposta JSON.</small></div></div>' : '');
+      (canAdmin ? '<div class="card integration-card" style="margin-top:14px"><span class="page-kicker">FONTE DE CONDUTORES</span><h2>Integração com o sistema externo</h2><p>Os nomes dos condutores são sincronizados pela API protegida do sistema externo. A chave fica somente nos segredos das Edge Functions do Supabase. Placa e tecnologia continuam sendo informadas pelo condutor.</p><div class="integration-state"><div><span class="status">API preparada</span><small id="driver-sync-summary">Consulte a API e atualize o cadastro local protegido.</small></div><button class="btn primary" id="sync-external-drivers">Sincronizar condutores</button></div></div>' : '');
 
     if (canAdmin) {
+      $('sync-external-drivers').onclick = async () => {
+        const button = $('sync-external-drivers');
+        button.disabled = true;
+        button.textContent = 'Sincronizando…';
+        try {
+          const { data, error } = await sb.functions.invoke('lovable-driver-sync', { body: { action: 'sync' } });
+          if (error) throw error;
+          if (data && data.error) throw new Error(data.error);
+          $('driver-sync-summary').textContent = (data.imported || 0) + ' condutor(es) atualizado(s), ' + (data.ignored || 0) + ' ignorado(s).';
+          toast('Condutores sincronizados com sucesso.');
+        } catch (error) {
+          toast(error.message || 'Não foi possível sincronizar os condutores.');
+        } finally {
+          button.disabled = false;
+          button.textContent = 'Sincronizar condutores';
+        }
+      };
       $('add-base').onclick = async () => { const name = $('new-base-name').value.trim(); if (!name) return; try { await call(sb.from('operation_bases').insert({ name }), 'Base criada.'); renderBases(); } catch (e) {} };
       $('add-carrier').onclick = async () => {
         const name = $('new-carrier-name').value.trim(); const baseId = $('new-carrier-base').value;
