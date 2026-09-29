@@ -3,9 +3,6 @@ project_id = "smart-chat"
 [functions.checklist-media]
 verify_jwt = false
 
-[functions.fleet-sheet-sync]
-verify_jwt = false
-
 [functions.admin-create-user]
 verify_jwt = false
 

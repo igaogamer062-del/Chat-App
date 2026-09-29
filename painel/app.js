@@ -389,27 +389,56 @@
   }
 
   // ============================================================
-  // BASES (transportadoras, vínculos, planilha de teste)
+  // BASES (transportadoras, vínculos e fonte externa de condutores)
   // ============================================================
+  function carrierNamesFromText(text) {
+    return String(text || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim().replace(/^[•*-]\s*/, ''))
+      .map((line) => line.includes(';') ? line.split(';')[0].trim() : line)
+      .filter((line) => line && !/^transportadora(s)?$/i.test(line))
+      .filter((line, index, rows) => rows.findIndex((item) => item.toLocaleLowerCase('pt-BR') === line.toLocaleLowerCase('pt-BR')) === index);
+  }
+
+  async function carrierNamesFromPdf(file) {
+    const pdfjs = await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs');
+    pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs';
+    const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+    const lines = [];
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const rows = new Map();
+      content.items.forEach((item) => {
+        const y = Math.round(item.transform[5]);
+        const row = rows.get(y) || [];
+        row.push({ x: item.transform[4], value: item.str });
+        rows.set(y, row);
+      });
+      [...rows.entries()].sort((a, b) => b[0] - a[0]).forEach(([, row]) => {
+        lines.push(row.sort((a, b) => a.x - b.x).map((item) => item.value).join(' ').trim());
+      });
+    }
+    return carrierNamesFromText(lines.join('\n'));
+  }
+
   async function renderBases() {
     $('view').innerHTML = '<div class="empty-state">Carregando…</div>';
-    const [bases, carriers, baseCarriers, baseOperators, coordinators, fleet, profiles] = await Promise.all([
+    const [bases, carriers, baseCarriers, baseOperators, coordinators, profiles] = await Promise.all([
       call(sb.from('operation_bases').select('*').order('name')),
       call(sb.from('carriers').select('*').order('name')),
       call(sb.from('base_carriers').select('*')),
       call(sb.from('base_operators').select('*')),
       call(sb.from('base_coordinators').select('*')),
-      call(sb.from('mock_fleet_drivers').select('*').order('plate')),
       call(sb.from('profiles').select('id,full_name,username,access_role,chat_enabled,active').order('full_name')),
     ]);
     const baseName = (id) => (bases.find((b) => b.id === id) || {}).name || '—';
-    const carrierName = (id) => (carriers.find((c) => c.id === id) || {}).name || '—';
     const profName = (id) => { const p = profiles.find((x) => x.id === id); return p ? p.full_name || p.username : '—'; };
     const canAdmin = !!perms.bases_admin;
     const isAdminOrManager = false;
     const activeBases = bases.filter((b) => b.active);
-    const activeCarriers = carriers.filter((c) => c.active);
     const attendants = profiles.filter((p) => p.active && p.chat_enabled);
+    const baseOptions = (selected) => '<option value="">Sem base</option>' + activeBases.map((base) => '<option value="' + base.id + '"' + (base.id === selected ? ' selected' : '') + '>' + esc(base.name) + '</option>').join('');
 
     $('view').innerHTML =
       '<div class="page-head"><div><span class="page-kicker">CONFIGURAÇÃO OPERACIONAL</span><h1>Bases e transportadoras</h1><p>Defina quais usuários recebem Checklist ou Monitoramento em cada operação.</p></div></div>' +
@@ -423,8 +452,14 @@
       '<div class="card"><h2>Transportadoras</h2>' +
       (canAdmin ? '<div class="inline-form"><div class="form-row"><label>Nova transportadora</label><input id="new-carrier-name" placeholder="Ex.: TransBrasil"></div>' +
         '<div class="form-row"><label>Base vinculada</label><select id="new-carrier-base"><option value="">Sem base</option>' + activeBases.map((b) => '<option value="' + b.id + '">' + esc(b.name) + '</option>').join('') + '</select></div>' +
-        '<button class="btn primary" id="add-carrier">Adicionar</button></div>' : '') +
-      '<table><thead><tr><th>Transportadora</th><th>Base vinculada</th><th></th></tr></thead><tbody>' + carriers.map((c) => '<tr><td>' + esc(c.name) + '</td><td>' + esc(baseName((baseCarriers.find((bc) => bc.carrier_id === c.id) || {}).base_id)) + '</td><td class="row-actions">' + (canAdmin ? '<button class="btn small' + (c.active ? ' danger' : '') + '" data-carrier-active="' + c.id + '" data-next="' + (!c.active) + '">' + (c.active ? 'Excluir' : 'Reativar') + '</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' +
+        '<button class="btn primary" id="add-carrier">Adicionar</button></div>' +
+        '<div class="bulk-import"><div class="form-row"><label>Importar transportadoras por TXT ou PDF</label><input id="carrier-import-file" type="file" accept=".txt,text/plain,.pdf,application/pdf"></div>' +
+        '<div class="form-row"><label>Nomes encontrados · um por linha</label><textarea id="carrier-import-preview" rows="4" placeholder="Revise os nomes antes de importar"></textarea></div>' +
+        '<div class="inline-form"><div class="form-row"><label>Base para os nomes importados</label><select id="carrier-import-base">' + baseOptions('') + '</select></div><button class="btn primary" id="import-carriers">Importar lista</button></div></div>' : '') +
+      '<table><thead><tr><th>Transportadora</th><th>Base vinculada</th><th></th></tr></thead><tbody>' + carriers.map((c) => {
+        const linked = baseCarriers.find((bc) => bc.carrier_id === c.id);
+        return '<tr><td>' + esc(c.name) + (c.active ? '' : ' <span class="status off">Inativa</span>') + '</td><td>' + (canAdmin ? '<select data-carrier-base="' + c.id + '">' + baseOptions(linked && linked.base_id) + '</select>' : esc(baseName(linked && linked.base_id))) + '</td><td class="row-actions">' + (canAdmin ? '<button class="btn small" data-save-carrier-base="' + c.id + '">Salvar base</button><button class="btn small danger" data-delete-carrier="' + c.id + '" data-carrier-name="' + esc(c.name) + '">Excluir</button>' : '') + '</td></tr>';
+      }).join('') + '</tbody></table></div>' +
 
       // Vínculo de operadores por base (Coordenador consegue mexer aqui, escopado por RLS)
       '<div class="card"><h2>Atendentes por base</h2>' +
@@ -441,16 +476,7 @@
         '<button class="btn primary" id="add-base-coordinator">Vincular</button></div>' +
         '<div class="tag-row">' + coordinators.map((c) => '<span class="tag">' + esc(baseName(c.base_id)) + ' · ' + esc(profName(c.user_id)) + ' <button data-remove-co="' + c.id + '">×</button></span>').join('') + '</div></div>' : '') +
       '</div>' +
-
-      // Base de veículos sincronizada da planilha Google (mock_fleet_drivers)
-      (canAdmin ? '<div class="card" style="margin-top:14px"><div class="card-title-row"><div><h2>Base de veículos</h2><p class="card-subtitle">Dados usados para localizar a transportadora e encaminhar o Monitoramento.</p></div><button class="btn primary" id="sync-fleet">Sincronizar planilha Google</button></div>' +
-        '<p class="source-line">Fonte: <a href="https://docs.google.com/spreadsheets/d/1U2RyPFX83muXk5Goal1_HrQnoOpfXLGado_LOLsLS1w/edit" target="_blank" rel="noopener">Base de dados compartilhada</a></p>' +
-        '<div class="inline-form"><div class="form-row"><label>Placa</label><input id="fleet-plate" placeholder="ABC1D23"></div>' +
-        '<div class="form-row"><label>Condutor</label><input id="fleet-driver"></div>' +
-        '<div class="form-row"><label>Tecnologia</label><input id="fleet-tech"></div>' +
-        '<div class="form-row"><label>Transportadora</label><select id="fleet-carrier">' + activeCarriers.map((c) => '<option value="' + c.id + '">' + esc(c.name) + '</option>').join('') + '</select></div>' +
-        '<button class="btn primary" id="add-fleet">Adicionar linha</button></div>' +
-        table(['Placa', 'Condutor', 'Tecnologia', 'Transportadora'], fleet.map((f) => [f.plate, f.driver_name, f.technology, carrierName(f.carrier_id)])) + '</div>' : '');
+      (canAdmin ? '<div class="card integration-card" style="margin-top:14px"><span class="page-kicker">FONTE DE CONDUTORES</span><h2>Integração com o sistema externo</h2><p>O Google Sheets foi removido deste fluxo. Os nomes dos condutores serão consultados pela API do sistema criado no Lovable. Placa e tecnologia continuarão sendo informadas pelo condutor para agilizar o atendimento.</p><div class="integration-state"><span class="status off">Aguardando configuração da API</span><small>Precisamos da URL base, autenticação, endpoint de condutores, paginação e exemplo da resposta JSON.</small></div></div>' : '');
 
     if (canAdmin) {
       $('add-base').onclick = async () => { const name = $('new-base-name').value.trim(); if (!name) return; try { await call(sb.from('operation_bases').insert({ name }), 'Base criada.'); renderBases(); } catch (e) {} };
@@ -458,52 +484,41 @@
         const name = $('new-carrier-name').value.trim(); const baseId = $('new-carrier-base').value;
         if (!name) return;
         try {
-          const created = await call(sb.from('carriers').insert({ name }).select().single(), 'Transportadora criada.');
-          if (baseId) await call(sb.from('base_carriers').insert({ base_id: baseId, carrier_id: created.id }));
+          await call(sb.rpc('admin_bulk_upsert_carriers', { carrier_names: [name], target_base: baseId || null }), 'Transportadora criada.');
           renderBases();
         } catch (e) {}
       };
       document.querySelectorAll('[data-base-active]').forEach((b) => (b.onclick = async () => { try { await call(sb.rpc('admin_set_base_active', { target_base: b.dataset.baseActive, is_active: b.dataset.next === 'true' }), b.dataset.next === 'true' ? 'Base reativada.' : 'Base excluída.'); renderBases(); } catch (e) {} }));
-      document.querySelectorAll('[data-carrier-active]').forEach((b) => (b.onclick = async () => { try { await call(sb.rpc('admin_set_carrier_active', { target_carrier: b.dataset.carrierActive, is_active: b.dataset.next === 'true' }), b.dataset.next === 'true' ? 'Transportadora reativada.' : 'Transportadora excluída.'); renderBases(); } catch (e) {} }));
-      $('add-fleet').onclick = async () => {
-        const plate = $('fleet-plate').value.trim().toUpperCase().replace(/[-\s]/g, '');
-        if (!/^[A-Z]{3}[0-9][A-Z0-9][0-9]{2}$/.test(plate)) { toast('Informe uma placa válida, como ABC1D23.'); return; }
-        try { await call(sb.from('mock_fleet_drivers').insert({ plate, driver_name: $('fleet-driver').value.trim(), technology: $('fleet-tech').value.trim(), carrier_id: $('fleet-carrier').value }), 'Linha adicionada.'); renderBases(); } catch (e) {}
-      };
-      $('sync-fleet').onclick = async () => {
-        const button = $('sync-fleet');
-        button.disabled = true;
-        button.textContent = 'Sincronizando…';
+      document.querySelectorAll('[data-save-carrier-base]').forEach((button) => (button.onclick = async () => {
+        const select = document.querySelector('[data-carrier-base="' + button.dataset.saveCarrierBase + '"]');
         try {
-          const source = 'https://docs.google.com/spreadsheets/d/1U2RyPFX83muXk5Goal1_HrQnoOpfXLGado_LOLsLS1w/export?format=csv&gid=0';
-          const response = await fetch(source);
-          if (!response.ok) throw new Error('Não foi possível acessar a planilha compartilhada.');
-          const lines = (await response.text()).trim().split(/\r?\n/).map((line) => line.split(',').map((cell) => cell.trim().replace(/^"|"$/g, '')));
-          const header = lines.shift().map((cell) => cell.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase());
-          const index = { carrier: header.indexOf('transportadora'), plate: header.indexOf('placa'), driver: header.indexOf('condutor'), technology: header.indexOf('tecnologia') };
-          if (Object.values(index).some((value) => value < 0)) throw new Error('A planilha precisa ter Transportadora, Placa, Condutor e Tecnologia.');
-          const currentCarriers = await call(sb.from('carriers').select('id,name'));
-          const carrierByName = new Map(currentCarriers.map((item) => [item.name.trim().toLowerCase(), item]));
-          let imported = 0;
-          for (const columns of lines) {
-            const carrierName = columns[index.carrier];
-            const plate = (columns[index.plate] || '').toUpperCase().replace(/[-\s]/g, '');
-            if (!carrierName || !/^[A-Z]{3}[0-9][A-Z0-9][0-9]{2}$/.test(plate)) continue;
-            const key = carrierName.toLowerCase();
-            let carrier = carrierByName.get(key);
-            if (!carrier) {
-              carrier = await call(sb.from('carriers').insert({ name: carrierName }).select().single());
-              carrierByName.set(key, carrier);
-            }
-            await call(sb.from('mock_fleet_drivers').upsert({ plate, driver_name: columns[index.driver] || null, technology: columns[index.technology] || null, carrier_id: carrier.id }, { onConflict: 'plate' }));
-            imported += 1;
-          }
-          toast(imported + ' veículo(s) sincronizado(s).');
-          await renderBases();
-        } catch (e) {
-          button.disabled = false;
-          button.textContent = 'Sincronizar planilha Google';
-        }
+          await call(sb.rpc('admin_set_carrier_base', { target_carrier: button.dataset.saveCarrierBase, target_base: select.value || null }), 'Base vinculada.');
+          renderBases();
+        } catch (e) {}
+      }));
+      document.querySelectorAll('[data-delete-carrier]').forEach((button) => (button.onclick = async () => {
+        if (!confirm('Excluir permanentemente a transportadora "' + button.dataset.carrierName + '"? O nome será preservado nos atendimentos históricos.')) return;
+        try { await call(sb.rpc('admin_delete_carrier', { target_carrier: button.dataset.deleteCarrier }), 'Transportadora excluída definitivamente.'); renderBases(); } catch (e) {}
+      }));
+      $('carrier-import-file').onchange = async (event) => {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+        try {
+          const names = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf') ? await carrierNamesFromPdf(file) : carrierNamesFromText(await file.text());
+          $('carrier-import-preview').value = names.join('\n');
+          toast(names.length + ' nome(s) encontrados. Revise a lista.');
+        } catch (error) { toast('Não foi possível ler o arquivo. Verifique se o PDF contém texto selecionável.'); }
+      };
+      $('import-carriers').onclick = async () => {
+        const names = carrierNamesFromText($('carrier-import-preview').value);
+        if (!names.length) { toast('Adicione ao menos uma transportadora.'); return; }
+        const button = $('import-carriers'); button.disabled = true;
+        try {
+          const result = await call(sb.rpc('admin_bulk_upsert_carriers', { carrier_names: names, target_base: $('carrier-import-base').value || null }));
+          const summary = result && result[0];
+          toast((summary ? summary.imported : names.length) + ' transportadora(s) importada(s).');
+          renderBases();
+        } catch (e) { button.disabled = false; }
       };
     }
     if (perms.base_operators_manage) {

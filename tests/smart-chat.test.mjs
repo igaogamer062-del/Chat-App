@@ -48,11 +48,18 @@ test('complete flows include rescheduling, rejection items and routed operator h
   assert.doesNotMatch(panel, /Encaminhar ao operador/);
 });
 
-test('Google Sheets synchronization expects the supplied columns', () => {
-  const fn = read('supabase/functions/fleet-sheet-sync/index.ts');
-  assert.match(fn, /Transportadora/i);
-  assert.match(fn, /1U2RyPFX83muXk5Goal1_HrQnoOpfXLGado_LOLsLS1w/);
-  assert.match(fn, /mock_fleet_drivers/);
+test('carrier management supports permanent deletion, base linking and file import', () => {
+  const panel = read('painel/app.js');
+  const sql = read('supabase/023_carriers_management.sql');
+  assert.match(panel, /carrier-import-file/);
+  assert.match(panel, /accept="\.txt,text\/plain,\.pdf,application\/pdf"/);
+  assert.match(panel, /admin_set_carrier_base/);
+  assert.match(panel, /admin_delete_carrier/);
+  assert.match(sql, /carrier_name_snapshot/);
+  assert.match(sql, /on delete set null/i);
+  assert.match(sql, /admin_bulk_upsert_carriers/);
+  assert.doesNotMatch(panel, /Sincronizar planilha Google|docs\.google\.com\/spreadsheets/);
+  assert.equal(fs.existsSync(path.join(root, 'supabase/functions/fleet-sheet-sync/index.ts')), false);
 });
 
 test('operator panel renders driver attachments', () => {
