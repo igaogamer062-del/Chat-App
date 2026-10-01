@@ -6,8 +6,11 @@ verify_jwt = false
 [functions.admin-create-user]
 verify_jwt = false
 
-[functions.send-chat-push]
+[functions.lovable-driver-sync]
 verify_jwt = false
 
-[functions.lovable-driver-sync]
+[functions.whatsapp-webhook]
+verify_jwt = false
+
+[functions.send-whatsapp-message]
 verify_jwt = false

@@ -50,11 +50,16 @@ function normalizeDriver(row: JsonRecord, index: number) {
   ]);
   const externalId = firstText(row, ['id', 'driver_id', 'external_id', 'uuid', 'codigo', 'driver.id']) ||
     `${fullName.toLocaleLowerCase('pt-BR')}::${carrierName?.toLocaleLowerCase('pt-BR') || ''}::${index}`;
+  const rawPhone = firstText(row, ['phone', 'phone_number', 'mobile', 'telefone', 'celular', 'driver.phone', 'condutor.telefone']);
+  const phoneDigits = String(rawPhone || '').replace(/\D/g, '');
   return {
     provider: 'lovable-alert-hub',
     external_id: externalId,
     full_name: fullName.replace(/\s+/g, ' '),
     carrier_name: carrierName?.replace(/\s+/g, ' ') || null,
+    phone_e164: phoneDigits ? `+${phoneDigits.startsWith('55') ? phoneDigits : `55${phoneDigits}`}` : null,
+    vehicle_plate: firstText(row, ['plate', 'vehicle_plate', 'placa', 'vehicle.plate', 'veiculo.placa']),
+    technology: firstText(row, ['technology', 'tracker_technology', 'tecnologia', 'tracker.name', 'rastreador.tecnologia']),
     active: row.active !== false && row.ativo !== false && row.status !== 'inactive' && row.status !== 'inativo',
     raw_payload: row,
     synced_at: new Date().toISOString(),

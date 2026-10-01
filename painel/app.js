@@ -63,7 +63,7 @@
     return data;
   }
   async function notifyDriver(sessionId, body, title = 'Smart Chat') {
-    try { await sb.functions.invoke('send-chat-push', { body: { session_id: sessionId, body, title } }); } catch (_) {}
+    try { await sb.functions.invoke('send-whatsapp-message', { body: { session_id: sessionId, body, title } }); } catch (_) {}
   }
 
   // ============================================================
@@ -115,12 +115,14 @@
     if ((me.chat_enabled || me.access_role === 'Gestor') && (perms.checklist_chat || perms.monitoring_chat)) list.push(['atendimentos', 'Atendimentos']);
     list.push(['historico', me.access_role === 'Gestor' ? 'Histórico' : 'Meu histórico']);
     if (perms.bases_admin || perms.base_operators_manage) list.push(['bases', 'Bases e transportadoras']);
+    if (me.access_role === 'Gestor') list.push(['bot', 'Bot e manuais']);
     if (perms.users_manage) list.push(['usuarios', 'Usuários e acessos']);
     const icons = {
       dashboard: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
       atendimentos: '<svg viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>',
       historico: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
       bases: '<svg viewBox="0 0 24 24"><path d="M4 21V8l8-5 8 5v13M8 21v-7h8v7M8 9h.01M16 9h.01"/></svg>',
+      bot: '<svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M8 12h.01M16 12h.01M8 16h8"/></svg>',
       usuarios: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M17 11a4 4 0 0 1 5 4v3"/></svg>',
     };
     $('tabs').innerHTML = list.map(([id, label]) => '<button data-tab="' + id + '"><span class="tab-icon">' + icons[id] + '</span><span>' + label + '</span></button>').join('');
@@ -136,6 +138,7 @@
     else if (tab === 'dashboard') renderDashboard();
     else if (tab === 'historico') renderHistorico();
     else if (tab === 'bases') renderBases();
+    else if (tab === 'bot') renderBot();
     else if (tab === 'usuarios') renderUsuarios();
     else $('view').innerHTML = '<div class="empty-state">Você não tem acesso a nenhuma área do painel ainda.</div>';
   }
@@ -568,6 +571,94 @@
       if (addCo) addCo.onclick = async () => { try { await call(sb.from('base_coordinators').insert({ base_id: $('co-base').value, user_id: $('co-user').value }), 'Coordenador vinculado.'); renderBases(); } catch (e) {} };
       document.querySelectorAll('[data-remove-co]').forEach((b) => (b.onclick = async () => { try { await call(sb.from('base_coordinators').delete().eq('id', b.dataset.removeCo)); renderBases(); } catch (e) {} }));
     }
+  }
+
+  // ============================================================
+  // BOT DO WHATSAPP E BASE DE CONHECIMENTO
+  // ============================================================
+  async function manualTextFromFile(file) {
+    if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+      const pdfjs = await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs');
+      pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs';
+      const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+      const pages = [];
+      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+        const page = await pdf.getPage(pageNumber);
+        const content = await page.getTextContent();
+        pages.push(content.items.map((item) => item.str).join(' '));
+      }
+      return pages.join('\n\n').replace(/\s+/g, ' ').trim();
+    }
+    return (await file.text()).trim();
+  }
+
+  async function renderBot() {
+    $('view').innerHTML = '<div class="empty-state">Carregando…</div>';
+    const [settings, manuals] = await Promise.all([
+      call(sb.from('whatsapp_bot_settings').select('*').eq('id', true).single()),
+      call(sb.from('bot_manuals').select('id,title,technology,file_name,active,created_at').order('created_at', { ascending: false })),
+    ]);
+    const webhookUrl = cfg.url + '/functions/v1/whatsapp-webhook';
+    $('view').innerHTML =
+      '<div class="page-head"><div><span class="page-kicker">ATENDIMENTO AUTOMÁTICO</span><h1>Bot do WhatsApp</h1><p>Configure as respostas iniciais, publique manuais e acompanhe o endereço usado pela Meta.</p></div></div>' +
+      '<div class="grid cols-2 bot-grid">' +
+      '<section class="card"><h2>Funcionamento do bot</h2><label class="bot-switch"><input id="bot-enabled" type="checkbox"' + (settings.enabled ? ' checked' : '') + '><span>Bot ativo para novas mensagens</span></label>' +
+      '<div class="form-row"><label>Saudação</label><textarea id="bot-greeting" rows="3">' + esc(settings.greeting) + '</textarea></div>' +
+      '<div class="form-row"><label>Telefone não localizado</label><textarea id="bot-unknown" rows="3">' + esc(settings.unknown_driver_message) + '</textarea></div>' +
+      '<div class="form-row"><label>Resposta quando o manual não ajudar</label><textarea id="bot-fallback" rows="3">' + esc(settings.fallback_message) + '</textarea></div>' +
+      '<button class="btn primary" id="save-bot-settings">Salvar configuração</button></section>' +
+      '<section class="card"><h2>Conexão oficial da Meta</h2><p class="card-subtitle">Use este endereço como Callback URL ao configurar o webhook do WhatsApp.</p>' +
+      '<div class="webhook-address"><code>' + esc(webhookUrl) + '</code><button class="btn small" id="copy-webhook">Copiar</button></div>' +
+      '<div class="bot-flow"><b>Fluxo operacional</b><span>Mensagem → identificação pelo telefone → consulta aos manuais ou transferência → operador da base correta.</span></div>' +
+      '<p class="card-subtitle">O token, o segredo do aplicativo e a chave da Meta ficam somente nos Secrets das Edge Functions.</p></section>' +
+      '</div>' +
+      '<section class="card" style="margin-top:16px"><div class="manual-head"><div><h2>Manuais das tecnologias</h2><p class="card-subtitle">Aceita TXT e PDF com texto selecionável. O bot pesquisa o conteúdo antes de oferecer atendimento humano.</p></div></div>' +
+      '<div class="manual-form"><div class="form-row"><label>Título</label><input id="manual-title" placeholder="Ex.: Manual Omnilink"></div>' +
+      '<div class="form-row"><label>Tecnologia</label><input id="manual-technology" placeholder="Ex.: Omnilink"></div>' +
+      '<div class="form-row"><label>Arquivo</label><input id="manual-file" type="file" accept=".txt,text/plain,.pdf,application/pdf"></div>' +
+      '<button class="btn primary" id="add-manual">Adicionar manual</button></div>' +
+      '<div class="history-table-wrap"><table><thead><tr><th>Manual</th><th>Tecnologia</th><th>Arquivo</th><th>Adicionado</th><th></th></tr></thead><tbody>' +
+      (manuals.length ? manuals.map((manual) => '<tr><td>' + esc(manual.title) + '</td><td>' + esc(manual.technology || 'Todas') + '</td><td>' + esc(manual.file_name || '—') + '</td><td>' + new Date(manual.created_at).toLocaleDateString('pt-BR') + '</td><td><button class="btn small danger" data-delete-manual="' + manual.id + '">Excluir</button></td></tr>').join('') : '<tr><td colspan="5"><div class="empty-state">Nenhum manual cadastrado.</div></td></tr>') +
+      '</tbody></table></div></section>';
+
+    $('copy-webhook').onclick = async () => { await navigator.clipboard.writeText(webhookUrl); toast('Endereço do webhook copiado.'); };
+    $('save-bot-settings').onclick = async () => {
+      const button = $('save-bot-settings'); button.disabled = true;
+      try {
+        await call(sb.from('whatsapp_bot_settings').update({
+          enabled: $('bot-enabled').checked,
+          greeting: $('bot-greeting').value.trim(),
+          unknown_driver_message: $('bot-unknown').value.trim(),
+          fallback_message: $('bot-fallback').value.trim(),
+          updated_at: new Date().toISOString(),
+          updated_by: me.id,
+        }).eq('id', true), 'Configuração do bot salva.');
+      } catch (error) {} finally { button.disabled = false; }
+    };
+    $('add-manual').onclick = async () => {
+      const file = $('manual-file').files && $('manual-file').files[0];
+      const title = $('manual-title').value.trim();
+      if (!title || !file) { toast('Informe o título e selecione um arquivo.'); return; }
+      const button = $('add-manual'); button.disabled = true; button.textContent = 'Processando…';
+      try {
+        const content = await manualTextFromFile(file);
+        if (content.length < 20) throw new Error('O arquivo não possui texto suficiente ou o PDF é apenas uma imagem.');
+        if (content.length > 1000000) throw new Error('O manual ultrapassa o limite de 1 milhão de caracteres.');
+        await call(sb.from('bot_manuals').insert({
+          title,
+          technology: $('manual-technology').value.trim() || null,
+          file_name: file.name,
+          content,
+          created_by: me.id,
+        }), 'Manual adicionado ao bot.');
+        renderBot();
+      } catch (error) { toast(error.message || 'Não foi possível processar o manual.'); }
+      finally { if (document.body.contains(button)) { button.disabled = false; button.textContent = 'Adicionar manual'; } }
+    };
+    document.querySelectorAll('[data-delete-manual]').forEach((button) => (button.onclick = async () => {
+      if (!confirm('Excluir este manual da base de conhecimento?')) return;
+      try { await call(sb.from('bot_manuals').delete().eq('id', button.dataset.deleteManual), 'Manual excluído.'); renderBot(); } catch (error) {}
+    }));
   }
 
   // ============================================================

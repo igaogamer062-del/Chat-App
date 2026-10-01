@@ -1,60 +1,36 @@
-# Smart Chat — Sistema de Chamadas
+# Smart Chat — atendimento pelo WhatsApp
 
-Este pacote evolui o Chat Checklist original para um sistema de atendimento completo,
-com dois fluxos no bot (**Checklist** e **Monitoramento**), roteamento por Base/Transportadora,
-painel do operador com fila em tempo real, Dashboard e gestão de acessos (com papel Coordenador).
+O Smart Chat recebe mensagens pela API oficial do WhatsApp Cloud, identifica o
+condutor pelo número cadastrado, consulta manuais de tecnologia e transfere o
+atendimento para o operador correto no painel Web.
+
+## Fluxo
+
+1. O condutor envia uma mensagem ao número do WhatsApp da operação.
+2. O webhook do Supabase procura o telefone em `external_driver_directory`.
+3. O bot confirma nome, transportadora, placa e tecnologia disponíveis.
+4. Dúvidas são pesquisadas nos manuais cadastrados no painel.
+5. Ao pedir atendimento, o condutor escolhe Monitoramento ou Checklist.
+6. O sistema encontra a base e um operador online vinculado.
+7. As mensagens aparecem no painel Web e as respostas voltam ao WhatsApp.
 
 ## Estrutura
 
-- `index.html` — entrada pública com os links para condutores e equipe.
-- `driver-app/` — PWA do condutor. Bot pergunta Checklist ou Monitoramento, depois
-  Nome/Placa/Tecnologia, e encaminha automaticamente.
-- `painel/` — **novo**: painel do operador/coordenador/administrador (login, fila de
-  atendimentos com chat, Dashboard, Bases/Transportadoras, Usuários/Acessos).
-- `supabase/` — migrations SQL, na ordem em que devem ser executadas (veja `DEPLOY.md`).
-  - `000_core_setup.sql` — **novo**: autenticação, perfis e sistema de permissões (base que faltava no pacote original).
-  - `012` a `014` — Chat Checklist (mantidos como no pacote original).
-  - `015_bases_monitoramento_dashboard.sql` — Bases, Transportadoras, fluxo de
-    Monitoramento (com a "planilha" de teste) e as métricas do Dashboard.
-  - `016_complete_service_flows.sql` — reagendamento, itens reprovados e encaminhamento manual.
-- `js/`, `supabase/functions/` — mídia do chat e sincronização da planilha.
-- `DEPLOY.md` — passo a passo completo para colocar no ar (Supabase + GitHub Pages).
+- `painel/` — painel de gestores e operadores.
+- `supabase/025_whatsapp_bot.sql` — tabelas, busca de manuais, roteamento e
+  encerramento dos componentes exclusivos do antigo aplicativo móvel.
+- `supabase/functions/whatsapp-webhook/` — recebe mensagens e executa o bot.
+- `supabase/functions/send-whatsapp-message/` — envia ao WhatsApp as respostas
+  escritas pelos operadores.
+- `supabase/functions/lovable-driver-sync/` — mantém os dados dos condutores
+  sincronizados com a API externa.
+- `DEPLOY.md` — ativação no Supabase e na Meta.
 
-## Como o roteamento funciona
+## Segurança
 
-**Checklist:** qualquer operador com a permissão `checklist_chat` pode receber, sorteado
-entre os com menos atendimentos abertos no momento (aleatório em caso de empate).
+Tokens da Meta, chave da API externa, App Secret e service role ficam somente
+nos Secrets das Edge Functions do Supabase. O GitHub Pages recebe apenas a URL
+e a chave pública do projeto Supabase.
 
-**Monitoramento:** o bot pega Placa → consulta a "planilha" de teste (`mock_fleet_drivers`,
-que simula o sistema externo da transportadora) → acha a Transportadora → acha a Base
-vinculada a ela (aba **Bases** do painel) → sorteia um operador vinculado àquela Base com
-permissão `monitoring_chat`. Se qualquer etapa falhar (placa não achada, transportadora sem
-base, base sem operador disponível), o atendimento não fica perdido: ele aparece em
-**Atendimentos → Não roteados** para um Coordenador, Gerente ou Administrador encaminhar.
-
-## Papéis
-
-- **Operador / Líder / Supervisor** — atendem chamados (checklist e/ou monitoramento,
-  conforme a permissão liberada).
-- **Coordenador** — além de atender, pode vincular operadores às Bases sob sua gestão
-  ("vincular operações") e ver o Dashboard filtrado só pelas suas Bases.
-- **Gerente / Administrador** — acesso total: cria Bases/Transportadoras, define quem é
-  Coordenador de qual Base, muda função/acesso de qualquer usuário.
-
-## Aplicativo do condutor
-
-O PWA não depende de loja de aplicativos. O condutor abre `driver-app/` no navegador do
-celular e escolhe **Instalar aplicativo**. No Android, o navegador mostra a instalação;
-no iPhone, use **Compartilhar → Adicionar à Tela de Início**. O ícone do Smart Chat passa
-a aparecer junto aos outros aplicativos, mas o sistema continua recebendo atualizações
-pela mesma URL do GitHub Pages.
-
-## Estado atual
-
-Entregue: autenticação real, permissões por papel, roteamento automático,
-fila com chat em tempo real (polling a cada 4s), encerramento de atendimento, Dashboard
-com tempo médio/operadores ativos/volume por base e operador, CRUD de Bases/Transportadoras/
-vínculos, gestão de usuários e acessos, anexos e sincronização da planilha Google.
-
-A integração com a API real da transportadora continua preparada para uma próxima etapa.
-Até lá, a planilha Google compartilhada alimenta a base de veículos usada no roteamento.
+O antigo PWA do condutor foi removido. O histórico de atendimentos continua
+preservado no banco.

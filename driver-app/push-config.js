@@ -1,1 +1,0 @@
-window.SMART_CHAT_PUSH={publicKey:'BEgdF7OIZ285nSMvhvzVcTVbHdDLvwpREQtOoWulFpWkj0bEsGDZRGcFWb0l3fXCAzuEgsuKa5kVGXhBgiXn0b8'};

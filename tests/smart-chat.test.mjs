@@ -12,23 +12,12 @@ test('GitHub Pages opens the staff login directly', () => {
   assert.doesNotMatch(html, /README\.md/);
 });
 
-test('Supabase public configuration is present in both clients', () => {
-  for (const file of ['painel/config.js', 'driver-app/config.js']) {
-    const config = read(file);
-    assert.match(config, /https:\/\/[a-z0-9]+\.supabase\.co/);
-    assert.match(config, /sb_publishable_/);
-    assert.doesNotMatch(config, /SEU-PROJETO|SUA-CHAVE/);
-    assert.doesNotMatch(config, /service_role/);
-  }
-});
-
-test('PWA manifest and service worker use existing local assets', () => {
-  const manifest = JSON.parse(read('driver-app/manifest.webmanifest'));
-  assert.equal(manifest.name, 'Smart Chat');
-  assert.equal(manifest.display, 'standalone');
-  for (const icon of manifest.icons) assert.ok(fs.existsSync(path.join(root, 'driver-app', icon.src)), icon.src);
-  const sw = read('driver-app/sw.js');
-  assert.doesNotMatch(sw, /images\/icons/);
+test('Supabase public configuration exists only in the staff panel', () => {
+  const config = read('painel/config.js');
+  assert.match(config, /https:\/\/[a-z0-9]+\.supabase\.co/);
+  assert.match(config, /sb_publishable_/);
+  assert.doesNotMatch(config, /SEU-PROJETO|SUA-CHAVE|service_role/);
+  assert.equal(fs.existsSync(path.join(root, 'driver-app')), false);
 });
 
 test('the occurrence password SQL qualifies pgcrypto functions', () => {
@@ -67,13 +56,6 @@ test('operator panel renders driver attachments', () => {
   assert.match(read('painel/app.js'), /ChecklistMedia\.render/);
 });
 
-test('PWA restores the driver session behind a native launch screen', () => {
-  assert.match(read('driver-app/index.html'), /id="launch-screen"/);
-  assert.match(read('driver-app/app.js'), /localStorage\.getItem\(SESSION\)/);
-  assert.match(read('driver-app/app.js'), /visibilitychange/);
-  assert.doesNotMatch(read('driver-app/index.html'), /id="install-settings"/);
-});
-
 test('routing is constrained by base and unavailable queues are rejected', () => {
   const sql = read('supabase/019_smart_chat_roles_routing_admin.sql');
   assert.match(sql, /lower\(name\)=lower\('Checklist'\)/);
@@ -95,12 +77,6 @@ test('chat polling preserves typed text and the finish form', () => {
   assert.match(panel, /setInterval\(\(\) => \{ loadQueue\(\); if \(selectedSession\) refreshThreadMessages/);
   assert.match(panel, /body\.dataset\.signature === signature/);
   assert.doesNotMatch(panel, /setInterval\(\(\) => \{ loadQueue\(\); if \(selectedSession\) loadThread/);
-});
-
-test('desktop Enter sends and mobile Enter keeps the multiline behavior', () => {
-  const driver = read('driver-app/app.js');
-  assert.match(driver, /pointer: coarse/);
-  assert.match(driver, /e\.key==='Enter'.*!mobileInput/);
 });
 
 test('operators receive a private dashboard and their own history', () => {
@@ -151,14 +127,34 @@ test('unrouted conversations are not exposed in the staff chat queue', () => {
   assert.match(panel, /not\('operator_id', 'is', null\)/);
 });
 
-test('mobile routing waits five minutes and retries every ten seconds', () => {
-  const sql = read('supabase/021_mobile_app_routing.sql');
-  assert.match(sql, /start_mobile_smart_chat/);
-  assert.match(sql, /Não encontrado registros as informações apresentadas/);
-  assert.match(sql, /Quer encerrar o atendimento ou aguardar 5 min até ser atendido\?/);
-  assert.match(sql, /interval '5 minutes'/);
-  assert.match(sql, /interval '10 seconds'/);
-  assert.match(sql, /smart-chat-waiting-router/);
-  assert.match(sql, /checklist_sessions_mobile_own_read/);
-  assert.match(sql, /driver_auth_user_id=auth\.uid\(\)/);
+test('WhatsApp migration decommissions mobile auth without deleting chat history', () => {
+  const sql = read('supabase/025_whatsapp_bot.sql');
+  assert.match(sql, /drop function if exists public\.start_mobile_smart_chat/);
+  assert.match(sql, /drop table if exists public\.mobile_driver_profiles/);
+  assert.match(sql, /create table if not exists public\.whatsapp_contacts/);
+  assert.match(sql, /create table if not exists public\.bot_manuals/);
+  assert.doesNotMatch(sql, /drop table.*checklist_chat_sessions/i);
+  assert.doesNotMatch(sql, /drop table.*checklist_chat_messages_v2/i);
+});
+
+test('official WhatsApp webhook validates Meta signatures and routes support', () => {
+  const webhook = read('supabase/functions/whatsapp-webhook/index.ts');
+  assert.match(webhook, /x-hub-signature-256/);
+  assert.match(webhook, /WHATSAPP_APP_SECRET/);
+  assert.match(webhook, /WHATSAPP_VERIFY_TOKEN/);
+  assert.match(webhook, /route_whatsapp_chat/);
+  assert.match(webhook, /search_bot_manuals/);
+  assert.match(webhook, /external_driver_directory/);
+});
+
+test('operator replies are sent to WhatsApp and bot manuals are manageable', () => {
+  const panel = read('painel/app.js');
+  const sender = read('supabase/functions/send-whatsapp-message/index.ts');
+  assert.match(panel, /send-whatsapp-message/);
+  assert.match(panel, /renderBot/);
+  assert.match(panel, /manualTextFromFile/);
+  assert.match(panel, /bot_manuals/);
+  assert.match(sender, /WHATSAPP_PHONE_NUMBER_ID/);
+  assert.match(sender, /graph\.facebook\.com/);
+  assert.equal(fs.existsSync(path.join(root, 'supabase/functions/send-chat-push')), false);
 });

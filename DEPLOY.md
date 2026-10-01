@@ -1,99 +1,94 @@
-# Smart Chat — Guia de implantação (Supabase + GitHub Pages)
+# Colocar o bot oficial do WhatsApp no ar
 
-Este guia parte do zero: um projeto Supabase novo e um repositório GitHub novo.
+## 1. Atualizar o banco
 
-## 1. Criar o projeto Supabase
+No **SQL Editor** do Supabase, execute o arquivo
+`supabase/025_whatsapp_bot.sql`. Ele cria as configurações do bot, contatos,
+manuais e eventos do WhatsApp. Também remove as funções e tabelas exclusivas do
+aplicativo móvel, preservando atendimentos e mensagens.
 
-1. Acesse https://supabase.com/dashboard e crie um novo projeto (escolha uma senha forte para o banco).
-2. Aguarde o projeto ficar pronto e vá em **Project Settings → API**. Anote:
-   - **Project URL** (algo como `https://xxxxxxxx.supabase.co`)
-   - **anon public key** (chave pública, começa com `eyJ...` ou `sb_publishable_...`)
+Depois, em **Authentication → Providers**, desative **Google** se ele era usado
+somente pelo aplicativo do condutor. Em **Authentication → URL Configuration**,
+remova os redirects `smartchat://auth/callback` e os redirects do Expo. Não
+desative Email, pois a equipe continua entrando no painel com e-mail e senha.
 
-Nunca use a **service_role key** em nenhum arquivo do front-end — só a `anon public key`.
+## 2. Publicar as Edge Functions
 
-## 2. Rodar o SQL (nesta ordem exata)
-
-Vá em **SQL Editor** no painel do Supabase e execute, um arquivo por vez, colando o conteúdo e clicando em "Run":
-
-1. `supabase/000_core_setup.sql` — cria perfis, autenticação e sistema de permissões.
-2. `supabase/012_chat_checklist_pwa.sql`
-3. `supabase/013_driver_pwa_login_and_results.sql`
-4. `supabase/014_checklist_media_and_rules.sql`
-5. `supabase/015_bases_monitoramento_dashboard.sql` — Bases, Transportadoras, fluxo de Monitoramento e Dashboard.
-6. `supabase/016_complete_service_flows.sql` — encerramento completo e encaminhamento manual.
-
-Se algum passo der erro, leia a mensagem: normalmente é porque um arquivo anterior não foi executado ainda.
-
-## 3. Ativar login por e-mail/senha
-
-Em **Authentication → Providers**, confirme que **Email** está habilitado (é o padrão).
-Em **Authentication → Settings**, se for só uso interno, você pode desativar a confirmação por e-mail para agilizar os testes (não recomendado em produção).
-
-## 4. Criar o primeiro Administrador
-
-1. Vá em **Authentication → Users → Add user** e crie seu usuário (e-mail + senha).
-2. Volte ao **SQL Editor** e rode (trocando o e-mail):
-   ```sql
-   update public.profiles set access_role='Administrador'
-   where id = (select id from auth.users where email = 'seu-email@empresa.com');
-   ```
-3. Esse usuário já pode entrar no painel (`painel/index.html`) e, pela aba **Usuários**, promover os demais colegas conforme forem se cadastrando.
-
-## 5. Criar o bucket de anexos e publicar a função
-
-O arquivo `014_checklist_media_and_rules.sql` cria o bucket `checklist-chat-files`. Depois,
-publique a função `supabase/functions/checklist-media` pelo Supabase CLI:
+No terminal da pasta do Smart Chat:
 
 ```powershell
 npx.cmd supabase login
-npx.cmd supabase link --project-ref SEU_PROJECT_REF
-npx.cmd supabase functions deploy checklist-media --no-verify-jwt
+npx.cmd supabase link --project-ref dyewxsxmqywhffvtnpzo
+npx.cmd supabase functions deploy lovable-driver-sync --no-verify-jwt
+npx.cmd supabase functions deploy whatsapp-webhook --no-verify-jwt
+npx.cmd supabase functions deploy send-whatsapp-message --no-verify-jwt
 ```
 
-O `PROJECT_REF` é o código que aparece no começo da URL do projeto.
+## 3. Criar a configuração temporária na Meta
 
-## 6. Configurar as chaves nos dois apps
+1. Acesse `https://developers.facebook.com/apps/`.
+2. Clique em **Create app** e escolha um caso de uso relacionado ao WhatsApp.
+3. Vincule ou crie um portfólio empresarial.
+4. Adicione o produto **WhatsApp**.
+5. Em **WhatsApp → API Setup**, a Meta fornece um número de teste, um Phone
+   Number ID, um WhatsApp Business Account ID e um token temporário.
+6. Cadastre seu celular como destinatário de teste e confirme o código recebido.
 
-Edite estes dois arquivos com a URL e a chave anônima do passo 1:
+O número de teste serve para validar o bot com poucos destinatários autorizados.
+Para usar seu número secundário com qualquer condutor, adicione esse número ao
+WhatsApp Business Account e conclua a verificação solicitada pela Meta.
 
-- `driver-app/config.js`
-  ```js
-  window.CHECKLIST_CONFIG = { url: 'https://xxxxxxxx.supabase.co', key: 'SUA-CHAVE-ANON' };
-  ```
-- `painel/config.js`
-  ```js
-  window.PAINEL_CONFIG = { url: 'https://xxxxxxxx.supabase.co', key: 'SUA-CHAVE-ANON' };
-  ```
+## 4. Criar os Secrets no Supabase
 
-## 7. Publicar no GitHub Pages
+Abra **Supabase → Edge Functions → Secrets** e salve:
 
-1. Crie um repositório novo no GitHub e suba TODO o conteúdo desta pasta, incluindo o `index.html` da raiz.
-2. No repositório, vá em **Settings → Pages**.
-3. Em "Build and deployment", escolha **Deploy from a branch**, branch `main`, pasta `/ (root)`.
-4. Salve. Em 1–2 minutos o GitHub mostra a URL pública, algo como:
-   `https://SEU-USUARIO.github.io/SEU-REPO/`
-5. A raiz mostra a entrada do sistema, o painel fica em `.../painel/` e o app do condutor em `.../driver-app/`.
+```text
+WHATSAPP_ACCESS_TOKEN=token exibido pela Meta
+WHATSAPP_PHONE_NUMBER_ID=Phone Number ID da Meta
+WHATSAPP_VERIFY_TOKEN=uma frase secreta criada por você
+WHATSAPP_APP_SECRET=App Secret em Meta → App settings → Basic
+WHATSAPP_GRAPH_VERSION=v26.0
+```
 
-> GitHub Pages serve arquivos estáticos via HTTPS — é compatível com o Supabase JS Client sem nenhuma configuração extra de CORS (o Supabase já libera qualquer origem por padrão; se quiser restringir, isso se configura em **Project Settings → API → CORS**, mas não é obrigatório para funcionar).
+O valor de `WHATSAPP_VERIFY_TOKEN` é criado por você. Use uma frase longa e
+aleatória e informe exatamente o mesmo valor na configuração do webhook.
 
-## 8. Popular dados de teste
+## 5. Configurar o webhook na Meta
 
-Depois de logado no painel como Administrador, na aba **Bases**:
-1. Crie uma ou mais **Bases** (ex.: "Operação São Paulo").
-2. Crie **Transportadoras** já vinculando à base (ex.: "TransBrasil" → "Operação São Paulo").
-3. Em **Base de veículos**, clique em **Sincronizar planilha Google**. Também é possível cadastrar uma linha manualmente.
-4. Em **Operadores por base**, vincule operadores (que tenham a permissão `monitoring_chat`) às bases.
+Em **WhatsApp → Configuration → Webhooks**:
 
-Na aba **Usuários**, garanta que os operadores de monitoramento tenham a função certa (por padrão `Operador`, `Lider` e `Supervisor` já vêm com `monitoring_chat` liberado; ajuste em massa por função ou individualmente se precisar).
+- Callback URL:
+  `https://dyewxsxmqywhffvtnpzo.supabase.co/functions/v1/whatsapp-webhook`
+- Verify token: o mesmo `WHATSAPP_VERIFY_TOKEN` salvo no Supabase.
 
-## 9. Testar o fluxo do condutor
+Depois da validação, assine o campo **messages**.
 
-1. Abra `.../driver-app/` no celular (ou instale como PWA — "Adicionar à tela inicial").
-2. Cadastre uma conta de condutor.
-3. No bot, toque em **Checklist** ou **Monitoramento**, responda Nome/Placa/Tecnologia.
-4. Para o Monitoramento, use uma placa cadastrada na "Planilha de teste" para ver o roteamento automático funcionando; use uma placa qualquer para ver o fluxo de "não roteado" caindo na aba **Atendimentos → Não roteados** do painel.
+## 6. Sincronizar condutores
 
-## 10. Ir para produção depois
+No painel Web, entre como Gestor, abra **Bases e transportadoras** e clique em
+**Sincronizar condutores**. A API externa precisa devolver o telefone do
+condutor com um destes campos: `phone`, `phone_number`, `mobile`, `telefone` ou
+`celular`. O sincronizador também reconhece placa, tecnologia e transportadora.
 
-- Trocar a "Planilha de teste" (`mock_fleet_drivers`) por uma Edge Function que consulta a API real da transportadora — o comentário no fim de `015_bases_monitoramento_dashboard.sql` mostra exatamente onde trocar.
-- Revisar as políticas de RLS se o volume de usuários crescer bastante (hoje já é seguro para uso interno, mas vale uma auditoria antes de abrir para muitos clientes externos).
+## 7. Cadastrar manuais
+
+Abra **Bot e manuais**:
+
+1. Ajuste a saudação e as mensagens de fallback.
+2. Adicione manuais TXT ou PDF com texto selecionável.
+3. Informe a tecnologia para restringir o manual, ou deixe em branco para um
+   manual geral.
+4. Mantenha o bot ativo.
+
+## 8. Testar
+
+1. Envie `Olá` para o número de teste da Meta.
+2. Confirme se o bot reconhece o telefone e apresenta os dados.
+3. Envie uma dúvida presente em um manual.
+4. Digite `ATENDIMENTO` e escolha Monitoramento ou Checklist.
+5. Mantenha um operador online e vinculado à base correspondente.
+6. Responda pelo painel e confirme o recebimento no WhatsApp.
+
+Enquanto usar o token temporário da Meta, ele pode expirar. Para produção,
+gere um token de usuário do sistema com as permissões
+`whatsapp_business_management` e `whatsapp_business_messaging`.
