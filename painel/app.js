@@ -512,6 +512,9 @@
           if (error) throw error;
           if (data && data.error) throw new Error(data.error);
           $('driver-sync-summary').textContent = (data.imported || 0) + ' condutor(es), ' + (data.with_carrier || 0) + ' com transportadora vinculada e ' + (data.with_vehicle || 0) + ' com placa/tecnologia.';
+          if ((!data.with_carrier || !data.with_vehicle) && data.diagnostic_fields) {
+            $('driver-sync-summary').textContent += ' Campos recebidos — condutores: ' + (data.diagnostic_fields.drivers || []).join(', ') + '; veículos: ' + (data.diagnostic_fields.vehicles || []).join(', ') + '.';
+          }
           toast('Condutores sincronizados com sucesso.');
         } catch (error) {
           toast(error.message || 'Não foi possível sincronizar os condutores.');

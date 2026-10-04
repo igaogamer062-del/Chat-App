@@ -53,11 +53,21 @@ function normalizedKey(value: unknown) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9]/g, '');
 }
 
+function fieldNames(source: unknown, prefix = '', depth = 0): string[] {
+  const object = asRecord(source);
+  if (!object || depth > 1) return [];
+  return Object.entries(object).flatMap(([key, value]) => {
+    const field = prefix ? `${prefix}.${key}` : key;
+    const nested = asRecord(value);
+    return nested ? [field, ...fieldNames(nested, field, depth + 1)] : [field];
+  }).sort();
+}
+
 function findVehicle(driver: JsonRecord, vehicles: JsonRecord[]) {
   const ids = [firstText(driver, ['id', 'driver_id', 'driverId', 'external_id', 'uuid', 'codigo'])].filter(Boolean).map(normalizedKey);
   const phone = normalizedKey(firstText(driver, ['phone', 'phone_number', 'phoneNumber', 'mobile', 'telefone', 'celular']));
   const name = normalizedKey(firstText(driver, ['full_name', 'fullName', 'name', 'driver_name', 'driverName', 'nome', 'nome_completo']));
-  return vehicles.find((vehicle) => {
+  const direct = vehicles.find((vehicle) => {
     const vehicleDriverId = normalizedKey(firstText(vehicle, [
       'driver_id', 'driverId', 'driver.id', 'driver.uuid', 'condutor_id', 'condutorId', 'condutor.id',
     ]));
@@ -69,17 +79,29 @@ function findVehicle(driver: JsonRecord, vehicles: JsonRecord[]) {
     ]));
     return Boolean((vehicleDriverId && ids.includes(vehicleDriverId)) || (phone && vehiclePhone === phone) || (name && vehicleName === name));
   }) || null;
+  if (direct) return direct;
+
+  const driverCarrier = normalizedKey(firstText(driver, [
+    'carrier_id', 'carrierId', 'transporter_id', 'transporterId', 'transportadora_id', 'transportadoraId',
+    'carrier_name', 'carrierName', 'carrier', 'transporter', 'transportadora', 'carrier.name', 'transportadora.nome',
+  ]));
+  if (!driverCarrier) return null;
+  const sameCarrier = vehicles.filter((vehicle) => normalizedKey(firstText(vehicle, [
+    'carrier_id', 'carrierId', 'transporter_id', 'transporterId', 'transportadora_id', 'transportadoraId',
+    'carrier_name', 'carrierName', 'carrier', 'transporter', 'transportadora', 'carrier.name', 'transportadora.nome',
+  ])) === driverCarrier);
+  return sameCarrier.length === 1 ? sameCarrier[0] : null;
 }
 
 function normalizeDriver(row: JsonRecord, vehicle: JsonRecord | null, index: number) {
   const sources = [row, ...(vehicle ? [vehicle] : [])];
   const fullName = firstTextFrom(sources, [
-    'full_name', 'fullName', 'name', 'driver_name', 'driverName', 'nome', 'nome_completo', 'driver.name', 'condutor.nome',
+    'full_name', 'fullName', 'name', 'driver_name', 'driverName', 'nome', 'nome_completo', 'driver', 'driver.name', 'condutor.nome',
   ]);
   if (!fullName || fullName.length < 2) return null;
   const carrierName = firstTextFrom(sources, [
-    'carrier_name', 'carrierName', 'transportadora', 'transportadora_nome', 'transportadoraName',
-    'transporter_name', 'transporterName', 'carrier.name', 'carrier.nome', 'transporter.name',
+    'carrier_name', 'carrierName', 'carrier', 'transportadora', 'transportadora_nome', 'transportadoraName',
+    'transporter', 'transporter_name', 'transporterName', 'carrier.name', 'carrier.nome', 'transporter.name',
     'transportadora.nome', 'transportadora.name', 'transportadora.razao_social', 'company.name', 'companyName',
   ]);
   const externalId = firstText(row, ['id', 'driver_id', 'driverId', 'external_id', 'uuid', 'codigo', 'driver.id']) ||
@@ -99,8 +121,9 @@ function normalizeDriver(row: JsonRecord, vehicle: JsonRecord | null, index: num
       'plate', 'vehicle_plate', 'vehiclePlate', 'placa', 'vehicle.plate', 'vehicle.placa', 'veiculo.placa',
     ]),
     technology: firstTextFrom(sources, [
-      'technology', 'technology_name', 'technologyName', 'tracker_technology', 'trackerTechnology',
-      'tecnologia', 'tracker.name', 'tracker.technology', 'rastreador.tecnologia', 'veiculo.tecnologia',
+      'technology', 'technology.name', 'technology_name', 'technologyName', 'tracker_technology', 'trackerTechnology',
+      'tracking_technology', 'trackingTechnology', 'tecnologia', 'tracker', 'tracker.name', 'tracker.technology',
+      'rastreador', 'rastreador.nome', 'rastreador.tecnologia', 'veiculo.tecnologia',
     ]),
     active: row.active !== false && row.ativo !== false && row.status !== 'inactive' && row.status !== 'inativo',
     raw_payload: row,
@@ -178,6 +201,10 @@ Deno.serve(async (request) => {
       with_phone: upserts.filter((row) => row.phone_e164).length,
       with_carrier: upserts.filter((row) => row.carrier_id).length,
       with_vehicle: upserts.filter((row) => row.vehicle_plate || row.technology).length,
+      diagnostic_fields: {
+        drivers: fieldNames(rows[0]),
+        vehicles: fieldNames(vehicles[0]),
+      },
     }), {
       headers: { ...cors, 'Content-Type': 'application/json' },
     });
