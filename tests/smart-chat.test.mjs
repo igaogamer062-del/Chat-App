@@ -79,6 +79,14 @@ test('chat polling preserves typed text and the finish form', () => {
   assert.doesNotMatch(panel, /setInterval\(\(\) => \{ loadQueue\(\); if \(selectedSession\) loadThread/);
 });
 
+test('desktop Enter sends chat messages while mobile Enter keeps a line break', () => {
+  const panel = read('painel/app.js');
+  assert.match(panel, /thread-input'\)\.onkeydown/);
+  assert.match(panel, /navigator\.userAgentData\?\.mobile/);
+  assert.match(panel, /e\.key !== 'Enter'/);
+  assert.match(panel, /e\.currentTarget\.form\.requestSubmit\(\)/);
+});
+
 test('operators receive a private dashboard and their own history', () => {
   const panel = read('painel/app.js');
   const sql = read('supabase/020_operator_dashboard.sql');

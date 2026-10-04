@@ -220,6 +220,12 @@
       input.value = '';
       try { await call(sb.from('checklist_chat_messages_v2').insert({ session_id: s.id, sender_type: 'operator', sender_id: me.id, body: text })); notifyDriver(s.id, text, me.full_name || 'Smart Chat'); await loadThread(s.id); } catch (e) {}
     };
+    $('thread-input').onkeydown = (e) => {
+      const mobileDevice = Boolean(navigator.userAgentData?.mobile) || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (e.key !== 'Enter' || e.shiftKey || e.isComposing || e.repeat || mobileDevice) return;
+      e.preventDefault();
+      e.currentTarget.form.requestSubmit();
+    };
     $('finish-btn').onclick = () => openFinishPanel(s);
     await refreshThreadMessages(sessionId, true);
   }
