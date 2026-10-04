@@ -148,6 +148,15 @@ test('Z-API webhook validates instance and secret and routes support', () => {
   assert.match(webhook, /external_driver_directory/);
 });
 
+test('WhatsApp routing skips unavailable operators and randomly selects an available operator from the base', () => {
+  const sql = read('supabase/027_random_operator_routing.sql');
+  assert.match(sql, /bo\.base_id=target_base/);
+  assert.match(sql, /operator_enabled/);
+  assert.match(sql, /last_seen_at>now\(\)-interval '5 minutes'/);
+  assert.match(sql, /order by random\(\)/);
+  assert.doesNotMatch(sql, /order by\s*\(\s*select count/i);
+});
+
 test('operator replies are sent to WhatsApp and bot manuals are manageable', () => {
   const panel = read('painel/app.js');
   const sender = read('supabase/functions/send-whatsapp-message/index.ts');
