@@ -274,8 +274,13 @@
           if (status === 'Reprovado' && !items.length) throw new Error('Informe ao menos um acessório ou item reprovado.');
           if (status === 'Reagendado' && (!scheduled || new Date(scheduled) <= new Date())) throw new Error('Informe uma data futura para o reagendamento.');
           button.disabled = true;
-          await call(sb.rpc('finish_checklist_chat_complete', { chat_session: s.id, checklist_status: status, outcome_reason: reason, failed_items: items, scheduled_for: scheduled }), 'Checklist encerrado.');
-          notifyDriver(s.id, 'Seu checklist foi finalizado. Consulte o resultado na aba Registros.');
+          const result = await call(sb.rpc('finish_checklist_chat_complete', { chat_session: s.id, checklist_status: status, outcome_reason: reason, failed_items: items, scheduled_for: scheduled }), 'Checklist encerrado.');
+          const checklistNumber = result && result[0] && result[0].checklist_number;
+          const summary = ['Checklist ' + (checklistNumber || '') + ' finalizado como ' + status + '.'];
+          if (reason) summary.push('Motivo: ' + reason + '.');
+          if (items.length) summary.push('Itens reprovados: ' + items.join(', ') + '.');
+          if (scheduled) summary.push('Novo agendamento: ' + new Date(scheduled).toLocaleString('pt-BR') + '.');
+          await notifyDriver(s.id, summary.join('\n'));
           selectedSession = null; $('thread').removeAttribute('data-session-id'); $('thread').innerHTML = '<div class="queue-empty">Selecione um atendimento na lista ao lado.</div>'; $('conversation-details').innerHTML = '<div class="details-empty">Os dados do atendimento aparecerão aqui.</div>'; await loadQueue();
         } catch (e) { toast(e.message || 'Não foi possível encerrar o atendimento.'); }
         finally { if (button && document.body.contains(button)) button.disabled = false; }
