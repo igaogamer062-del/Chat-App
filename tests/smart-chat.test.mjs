@@ -137,11 +137,12 @@ test('WhatsApp migration decommissions mobile auth without deleting chat history
   assert.doesNotMatch(sql, /drop table.*checklist_chat_messages_v2/i);
 });
 
-test('official WhatsApp webhook validates Meta signatures and routes support', () => {
+test('Z-API webhook validates instance and secret and routes support', () => {
   const webhook = read('supabase/functions/whatsapp-webhook/index.ts');
-  assert.match(webhook, /x-hub-signature-256/);
-  assert.match(webhook, /WHATSAPP_APP_SECRET/);
-  assert.match(webhook, /WHATSAPP_VERIFY_TOKEN/);
+  assert.match(webhook, /ZAPI_INSTANCE_ID/);
+  assert.match(webhook, /ZAPI_WEBHOOK_SECRET/);
+  assert.match(webhook, /api\.z-api\.io/);
+  assert.match(webhook, /text\?\.message/);
   assert.match(webhook, /route_whatsapp_chat/);
   assert.match(webhook, /search_bot_manuals/);
   assert.match(webhook, /external_driver_directory/);
@@ -154,7 +155,15 @@ test('operator replies are sent to WhatsApp and bot manuals are manageable', () 
   assert.match(panel, /renderBot/);
   assert.match(panel, /manualTextFromFile/);
   assert.match(panel, /bot_manuals/);
-  assert.match(sender, /WHATSAPP_PHONE_NUMBER_ID/);
-  assert.match(sender, /graph\.facebook\.com/);
+  assert.match(sender, /ZAPI_INSTANCE_TOKEN/);
+  assert.match(sender, /Client-Token/);
+  assert.match(sender, /api\.z-api\.io/);
   assert.equal(fs.existsSync(path.join(root, 'supabase/functions/send-chat-push')), false);
+});
+
+test('future bot engine remains an isolated inactive prototype', () => {
+  const engine = read('motor-bot/index.html');
+  assert.match(engine, /Ambiente inativo/);
+  assert.match(engine, /Sem conexão com produção/);
+  assert.doesNotMatch(engine, /supabase-js|config\.js|app\.js/);
 });

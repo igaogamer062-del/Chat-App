@@ -500,7 +500,7 @@
         '<button class="btn primary" id="add-base-coordinator">Vincular</button></div>' +
         '<div class="tag-row">' + coordinators.map((c) => '<span class="tag">' + esc(baseName(c.base_id)) + ' · ' + esc(profName(c.user_id)) + ' <button data-remove-co="' + c.id + '">×</button></span>').join('') + '</div></div>' : '') +
       '</div>' +
-      (canAdmin ? '<div class="card integration-card" style="margin-top:14px"><span class="page-kicker">FONTE DE CONDUTORES</span><h2>Integração com o sistema externo</h2><p>Os nomes dos condutores são sincronizados pela API protegida do sistema externo. A chave fica somente nos segredos das Edge Functions do Supabase. Placa e tecnologia continuam sendo informadas pelo condutor.</p><div class="integration-state"><div><span class="status">API preparada</span><small id="driver-sync-summary">Consulte a API e atualize o cadastro local protegido.</small></div><button class="btn primary" id="sync-external-drivers">Sincronizar condutores</button></div></div>' : '');
+      (canAdmin ? '<div class="card integration-card" style="margin-top:14px"><span class="page-kicker">FONTE DE CONDUTORES</span><h2>Integração com o sistema externo</h2><p>Condutores e veículos são sincronizados pela API protegida do sistema externo. O bot usa telefone, transportadora, placa e tecnologia disponíveis.</p><div class="integration-state"><div><span class="status">API preparada</span><small id="driver-sync-summary">Consulte a API e atualize o cadastro local protegido.</small></div><button class="btn primary" id="sync-external-drivers">Sincronizar condutores</button></div></div>' : '');
 
     if (canAdmin) {
       $('sync-external-drivers').onclick = async () => {
@@ -511,7 +511,7 @@
           const { data, error } = await sb.functions.invoke('lovable-driver-sync', { body: { action: 'sync' } });
           if (error) throw error;
           if (data && data.error) throw new Error(data.error);
-          $('driver-sync-summary').textContent = (data.imported || 0) + ' condutor(es) atualizado(s), ' + (data.ignored || 0) + ' ignorado(s).';
+          $('driver-sync-summary').textContent = (data.imported || 0) + ' condutor(es), ' + (data.with_carrier || 0) + ' com transportadora vinculada e ' + (data.with_vehicle || 0) + ' com placa/tecnologia.';
           toast('Condutores sincronizados com sucesso.');
         } catch (error) {
           toast(error.message || 'Não foi possível sincronizar os condutores.');
@@ -600,17 +600,17 @@
     ]);
     const webhookUrl = cfg.url + '/functions/v1/whatsapp-webhook';
     $('view').innerHTML =
-      '<div class="page-head"><div><span class="page-kicker">ATENDIMENTO AUTOMÁTICO</span><h1>Bot do WhatsApp</h1><p>Configure as respostas iniciais, publique manuais e acompanhe o endereço usado pela Meta.</p></div></div>' +
+      '<div class="page-head"><div><span class="page-kicker">ATENDIMENTO AUTOMÁTICO</span><h1>Bot do WhatsApp</h1><p>Configure as respostas iniciais, publique manuais e acompanhe a conexão usada pela Z-API.</p></div></div>' +
       '<div class="grid cols-2 bot-grid">' +
       '<section class="card"><h2>Funcionamento do bot</h2><label class="bot-switch"><input id="bot-enabled" type="checkbox"' + (settings.enabled ? ' checked' : '') + '><span>Bot ativo para novas mensagens</span></label>' +
       '<div class="form-row"><label>Saudação</label><textarea id="bot-greeting" rows="3">' + esc(settings.greeting) + '</textarea></div>' +
       '<div class="form-row"><label>Telefone não localizado</label><textarea id="bot-unknown" rows="3">' + esc(settings.unknown_driver_message) + '</textarea></div>' +
       '<div class="form-row"><label>Resposta quando o manual não ajudar</label><textarea id="bot-fallback" rows="3">' + esc(settings.fallback_message) + '</textarea></div>' +
       '<button class="btn primary" id="save-bot-settings">Salvar configuração</button></section>' +
-      '<section class="card"><h2>Conexão oficial da Meta</h2><p class="card-subtitle">Use este endereço como Callback URL ao configurar o webhook do WhatsApp.</p>' +
+      '<section class="card"><h2>Conexão Z-API</h2><p class="card-subtitle">Use este endereço como webhook de mensagens recebidas. Acrescente o segredo ao final durante a configuração.</p>' +
       '<div class="webhook-address"><code>' + esc(webhookUrl) + '</code><button class="btn small" id="copy-webhook">Copiar</button></div>' +
       '<div class="bot-flow"><b>Fluxo operacional</b><span>Mensagem → identificação pelo telefone → consulta aos manuais ou transferência → operador da base correta.</span></div>' +
-      '<p class="card-subtitle">O token, o segredo do aplicativo e a chave da Meta ficam somente nos Secrets das Edge Functions.</p></section>' +
+      '<p class="card-subtitle">ID da instância, token da instância, Client-Token e segredo do webhook ficam somente nos Secrets das Edge Functions.</p></section>' +
       '</div>' +
       '<section class="card" style="margin-top:16px"><div class="manual-head"><div><h2>Manuais das tecnologias</h2><p class="card-subtitle">Aceita TXT e PDF com texto selecionável. O bot pesquisa o conteúdo antes de oferecer atendimento humano.</p></div></div>' +
       '<div class="manual-form"><div class="form-row"><label>Título</label><input id="manual-title" placeholder="Ex.: Manual Omnilink"></div>' +

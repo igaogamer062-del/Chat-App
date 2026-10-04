@@ -35,30 +35,28 @@ Deno.serve(async (request) => {
       return new Response(JSON.stringify({ ok: true, skipped: true }), { headers: cors });
     }
 
-    const graphVersion = Deno.env.get('WHATSAPP_GRAPH_VERSION') || 'v26.0';
-    const response = await fetch(`https://graph.facebook.com/${graphVersion}/${Deno.env.get('WHATSAPP_PHONE_NUMBER_ID')}/messages`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${Deno.env.get('WHATSAPP_ACCESS_TOKEN')}`,
-        'Content-Type': 'application/json',
+    const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || '';
+    const instanceToken = Deno.env.get('ZAPI_INSTANCE_TOKEN') || '';
+    const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || '';
+    if (!instanceId || !instanceToken || !clientToken) throw new Error('Credenciais da Z-API não configuradas');
+
+    const response = await fetch(
+      `https://api.z-api.io/instances/${encodeURIComponent(instanceId)}/token/${encodeURIComponent(instanceToken)}/send-text`,
+      {
+        method: 'POST',
+        headers: { 'Client-Token': clientToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: session.whatsapp_contact.wa_id, message: messageBody, delayTyping: 1 }),
       },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: session.whatsapp_contact.wa_id,
-        type: 'text',
-        text: { preview_url: false, body: messageBody },
-      }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result?.error?.message || `WhatsApp respondeu ${response.status}`);
-    const messageId = result?.messages?.[0]?.id;
+    );
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result?.error || result?.message || `Z-API respondeu ${response.status}`);
+    const messageId = result?.messageId || result?.id || result?.zaapId;
     if (messageId) await admin.from('whatsapp_message_events').upsert({
       message_id: messageId,
       wa_id: session.whatsapp_contact.wa_id,
       direction: 'outbound',
       event_status: 'accepted',
-      payload: result,
+      payload: { provider: 'zapi', ...result },
     });
     return new Response(JSON.stringify({ ok: true, message_id: messageId }), { headers: cors });
   } catch (error) {

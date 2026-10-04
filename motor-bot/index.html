@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#071923">
+  <title>Motor do Bot · Smart Risk</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <aside>
+    <div class="brand"><span>SR</span><div><b>Motor do Bot</b><small>Smart Risk</small></div></div>
+    <nav>
+      <a class="active" href="#visao">Visão geral</a>
+      <a href="#identidade">Identidade</a>
+      <a href="#conhecimento">Conhecimento</a>
+      <a href="#roteamento">Roteamento</a>
+      <a href="#simulador">Simulador</a>
+      <a href="#publicacao">Publicação</a>
+    </nav>
+    <div class="status"><i></i><div><b>Ambiente inativo</b><small>Sem conexão com produção</small></div></div>
+  </aside>
+  <main>
+    <header><div><span>PLANEJAMENTO</span><h1>Motor de configuração do bot</h1><p>Área reservada para concentrar comportamento, conhecimento e distribuição dos atendimentos.</p></div><button disabled>Publicar alterações</button></header>
+    <section class="notice"><b>Estrutura preparada</b><span>Nenhuma configuração desta página altera o Smart Chat ou o bot atual.</span></section>
+    <div class="grid" id="visao">
+      <article><div class="number">01</div><h2>Identidade e conversa</h2><p>Saudação, tom de voz, menus, mensagens de ausência e respostas de segurança.</p><span class="tag">Planejado</span></article>
+      <article><div class="number">02</div><h2>Base de conhecimento</h2><p>Manuais por tecnologia, perguntas frequentes, versões e validação das respostas.</p><span class="tag">Planejado</span></article>
+      <article><div class="number">03</div><h2>Regras de roteamento</h2><p>Operação, base, transportadora, prioridade, disponibilidade e destino do atendimento.</p><span class="tag">Planejado</span></article>
+      <article><div class="number">04</div><h2>Teste antes de publicar</h2><p>Simulação completa da conversa e explicação da regra usada em cada decisão.</p><span class="tag">Planejado</span></article>
+    </div>
+    <section class="flow" id="roteamento">
+      <div><span>Mensagem recebida</span><small>Z-API</small></div><b>→</b>
+      <div><span>Identificação</span><small>Telefone e condutor</small></div><b>→</b>
+      <div><span>Decisão</span><small>Dúvida ou atendimento</small></div><b>→</b>
+      <div><span>Distribuição</span><small>Operador da base</small></div>
+    </section>
+    <p class="foot">Protótipo estrutural. A conexão com Supabase será feita em uma etapa posterior.</p>
+  </main>
+</body>
+</html>

@@ -28,12 +28,12 @@ function listFromPayload(payload: unknown): JsonRecord[] {
   if (Array.isArray(payload)) return payload.map(asRecord).filter(Boolean) as JsonRecord[];
   const body = asRecord(payload);
   if (!body) return [];
-  for (const key of ['data', 'drivers', 'items', 'results', 'records']) {
+  for (const key of ['data', 'drivers', 'vehicles', 'items', 'results', 'records']) {
     const candidate = body[key];
     if (Array.isArray(candidate)) return candidate.map(asRecord).filter(Boolean) as JsonRecord[];
     const nested = asRecord(candidate);
     if (nested) {
-      for (const nestedKey of ['data', 'drivers', 'items', 'results', 'records']) {
+      for (const nestedKey of ['data', 'drivers', 'vehicles', 'items', 'results', 'records']) {
         if (Array.isArray(nested[nestedKey])) return (nested[nestedKey] as unknown[]).map(asRecord).filter(Boolean) as JsonRecord[];
       }
     }
@@ -41,16 +41,53 @@ function listFromPayload(payload: unknown): JsonRecord[] {
   return [];
 }
 
-function normalizeDriver(row: JsonRecord, index: number) {
-  const fullName = firstText(row, ['full_name', 'name', 'driver_name', 'nome', 'nome_completo', 'driver.name', 'condutor.nome']);
-  if (!fullName || fullName.length < 2) return null;
-  const carrierName = firstText(row, [
-    'carrier_name', 'transportadora', 'transporter_name', 'carrier.name',
-    'transporter.name', 'transportadora.nome', 'company.name',
+function firstTextFrom(sources: JsonRecord[], paths: string[]) {
+  for (const source of sources) {
+    const value = firstText(source, paths);
+    if (value) return value;
+  }
+  return null;
+}
+
+function normalizedKey(value: unknown) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9]/g, '');
+}
+
+function findVehicle(driver: JsonRecord, vehicles: JsonRecord[]) {
+  const ids = [firstText(driver, ['id', 'driver_id', 'driverId', 'external_id', 'uuid', 'codigo'])].filter(Boolean).map(normalizedKey);
+  const phone = normalizedKey(firstText(driver, ['phone', 'phone_number', 'phoneNumber', 'mobile', 'telefone', 'celular']));
+  const name = normalizedKey(firstText(driver, ['full_name', 'fullName', 'name', 'driver_name', 'driverName', 'nome', 'nome_completo']));
+  return vehicles.find((vehicle) => {
+    const vehicleDriverId = normalizedKey(firstText(vehicle, [
+      'driver_id', 'driverId', 'driver.id', 'driver.uuid', 'condutor_id', 'condutorId', 'condutor.id',
+    ]));
+    const vehiclePhone = normalizedKey(firstText(vehicle, [
+      'driver_phone', 'driverPhone', 'driver.phone', 'condutor.telefone', 'condutor.celular', 'telefone_condutor',
+    ]));
+    const vehicleName = normalizedKey(firstText(vehicle, [
+      'driver_name', 'driverName', 'driver.name', 'condutor.nome', 'nome_condutor',
+    ]));
+    return Boolean((vehicleDriverId && ids.includes(vehicleDriverId)) || (phone && vehiclePhone === phone) || (name && vehicleName === name));
+  }) || null;
+}
+
+function normalizeDriver(row: JsonRecord, vehicle: JsonRecord | null, index: number) {
+  const sources = [row, ...(vehicle ? [vehicle] : [])];
+  const fullName = firstTextFrom(sources, [
+    'full_name', 'fullName', 'name', 'driver_name', 'driverName', 'nome', 'nome_completo', 'driver.name', 'condutor.nome',
   ]);
-  const externalId = firstText(row, ['id', 'driver_id', 'external_id', 'uuid', 'codigo', 'driver.id']) ||
+  if (!fullName || fullName.length < 2) return null;
+  const carrierName = firstTextFrom(sources, [
+    'carrier_name', 'carrierName', 'transportadora', 'transportadora_nome', 'transportadoraName',
+    'transporter_name', 'transporterName', 'carrier.name', 'carrier.nome', 'transporter.name',
+    'transportadora.nome', 'transportadora.name', 'transportadora.razao_social', 'company.name', 'companyName',
+  ]);
+  const externalId = firstText(row, ['id', 'driver_id', 'driverId', 'external_id', 'uuid', 'codigo', 'driver.id']) ||
     `${fullName.toLocaleLowerCase('pt-BR')}::${carrierName?.toLocaleLowerCase('pt-BR') || ''}::${index}`;
-  const rawPhone = firstText(row, ['phone', 'phone_number', 'mobile', 'telefone', 'celular', 'driver.phone', 'condutor.telefone']);
+  const rawPhone = firstTextFrom(sources, [
+    'phone', 'phone_number', 'phoneNumber', 'mobile', 'telefone', 'celular', 'driver_phone', 'driverPhone',
+    'driver.phone', 'condutor.telefone', 'condutor.celular',
+  ]);
   const phoneDigits = String(rawPhone || '').replace(/\D/g, '');
   return {
     provider: 'lovable-alert-hub',
@@ -58,8 +95,13 @@ function normalizeDriver(row: JsonRecord, index: number) {
     full_name: fullName.replace(/\s+/g, ' '),
     carrier_name: carrierName?.replace(/\s+/g, ' ') || null,
     phone_e164: phoneDigits ? `+${phoneDigits.startsWith('55') ? phoneDigits : `55${phoneDigits}`}` : null,
-    vehicle_plate: firstText(row, ['plate', 'vehicle_plate', 'placa', 'vehicle.plate', 'veiculo.placa']),
-    technology: firstText(row, ['technology', 'tracker_technology', 'tecnologia', 'tracker.name', 'rastreador.tecnologia']),
+    vehicle_plate: firstTextFrom(sources, [
+      'plate', 'vehicle_plate', 'vehiclePlate', 'placa', 'vehicle.plate', 'vehicle.placa', 'veiculo.placa',
+    ]),
+    technology: firstTextFrom(sources, [
+      'technology', 'technology_name', 'technologyName', 'tracker_technology', 'trackerTechnology',
+      'tecnologia', 'tracker.name', 'tracker.technology', 'rastreador.tecnologia', 'veiculo.tecnologia',
+    ]),
     active: row.active !== false && row.ativo !== false && row.status !== 'inactive' && row.status !== 'inativo',
     raw_payload: row,
     synced_at: new Date().toISOString(),
@@ -75,6 +117,7 @@ Deno.serve(async (request) => {
     const externalBase = (Deno.env.get('LOVABLE_API_BASE_URL') || '').replace(/\/$/, '');
     const externalKey = Deno.env.get('LOVABLE_API_KEY') || '';
     const driversPath = Deno.env.get('LOVABLE_DRIVERS_PATH') || '/api/public/v1/drivers';
+    const vehiclesPath = Deno.env.get('LOVABLE_VEHICLES_PATH') || '/api/public/v1/vehicles';
     if (!externalBase || !externalKey) throw new Error('Configure LOVABLE_API_BASE_URL e LOVABLE_API_KEY nos segredos do Supabase');
 
     const authorization = request.headers.get('Authorization') || '';
@@ -94,7 +137,13 @@ Deno.serve(async (request) => {
     const rows = listFromPayload(payload);
     if (!rows.length) throw new Error('A API não retornou uma lista de condutores reconhecível');
 
-    const normalized = rows.map(normalizeDriver).filter(
+    let vehicles: JsonRecord[] = [];
+    const vehicleResponse = await fetch(`${externalBase}${vehiclesPath.startsWith('/') ? vehiclesPath : `/${vehiclesPath}`}`, {
+      headers: { 'x-api-key': externalKey, Accept: 'application/json' },
+    });
+    if (vehicleResponse.ok) vehicles = listFromPayload(await vehicleResponse.json());
+
+    const normalized = rows.map((row, index) => normalizeDriver(row, findVehicle(row, vehicles), index)).filter(
       (row): row is NonNullable<ReturnType<typeof normalizeDriver>> => row !== null,
     );
     const ignored = rows.length - normalized.length;
@@ -105,17 +154,31 @@ Deno.serve(async (request) => {
     if (carrierNames.length) {
       const { data: carriers, error } = await admin.from('carriers').select('id,name').eq('active', true);
       if (error) throw error;
-      for (const carrier of carriers || []) carrierByName.set(String(carrier.name).trim().toLocaleLowerCase('pt-BR'), carrier.id);
+      for (const carrier of carriers || []) carrierByName.set(normalizedKey(carrier.name), carrier.id);
     }
 
     const upserts = normalized.map((row) => ({
       ...row,
-      carrier_id: row.carrier_name ? carrierByName.get(row.carrier_name.toLocaleLowerCase('pt-BR')) || null : null,
+      carrier_id: row.carrier_name ? (() => {
+        const wanted = normalizedKey(row.carrier_name);
+        const exact = carrierByName.get(wanted);
+        if (exact) return exact;
+        const compatible = [...carrierByName.entries()].filter(([name]) => name.length > 4 && (name.includes(wanted) || wanted.includes(name)));
+        return compatible.length === 1 ? compatible[0][1] : null;
+      })() : null,
     }));
     const { error: upsertError } = await admin.from('external_driver_directory').upsert(upserts, { onConflict: 'provider,external_id' });
     if (upsertError) throw upsertError;
 
-    return new Response(JSON.stringify({ ok: true, imported: upserts.length, ignored }), {
+    return new Response(JSON.stringify({
+      ok: true,
+      imported: upserts.length,
+      ignored,
+      vehicles_read: vehicles.length,
+      with_phone: upserts.filter((row) => row.phone_e164).length,
+      with_carrier: upserts.filter((row) => row.carrier_id).length,
+      with_vehicle: upserts.filter((row) => row.vehicle_plate || row.technology).length,
+    }), {
       headers: { ...cors, 'Content-Type': 'application/json' },
     });
   } catch (error) {

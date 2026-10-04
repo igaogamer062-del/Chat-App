@@ -1,49 +1,48 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const cors = { 'Content-Type': 'application/json' };
-const encoder = new TextEncoder();
+const jsonHeaders = { 'Content-Type': 'application/json' };
 
 function digits(value: unknown) {
   return String(value || '').replace(/\D/g, '');
 }
 
-function inboundText(message: Record<string, any>) {
-  if (message.type === 'text') return String(message.text?.body || '').trim();
-  if (message.type === 'button') return String(message.button?.text || message.button?.payload || '').trim();
-  if (message.type === 'interactive') {
-    return String(message.interactive?.button_reply?.title || message.interactive?.button_reply?.id ||
-      message.interactive?.list_reply?.title || message.interactive?.list_reply?.id || '').trim();
-  }
-  return '';
+function inboundText(payload: Record<string, any>) {
+  return String(
+    payload.text?.message ||
+    payload.buttonsResponseMessage?.message ||
+    payload.buttonsResponseMessage?.buttonId ||
+    payload.listResponseMessage?.title ||
+    payload.listResponseMessage?.message ||
+    payload.listResponseMessage?.selectedRowId ||
+    '',
+  ).trim();
 }
 
-async function validSignature(request: Request, rawBody: string) {
-  const appSecret = Deno.env.get('WHATSAPP_APP_SECRET') || '';
-  const signature = request.headers.get('x-hub-signature-256') || '';
-  if (!appSecret || !signature.startsWith('sha256=')) return false;
-  const key = await crypto.subtle.importKey('raw', encoder.encode(appSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const digest = await crypto.subtle.sign('HMAC', key, encoder.encode(rawBody));
-  const expected = `sha256=${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
-  if (expected.length !== signature.length) return false;
-  let mismatch = 0;
-  for (let index = 0; index < expected.length; index += 1) mismatch |= expected.charCodeAt(index) ^ signature.charCodeAt(index);
-  return mismatch === 0;
+function zapiCredentials() {
+  const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || '';
+  const instanceToken = Deno.env.get('ZAPI_INSTANCE_TOKEN') || '';
+  const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || '';
+  if (!instanceId || !instanceToken || !clientToken) throw new Error('Credenciais da Z-API não configuradas');
+  return { instanceId, instanceToken, clientToken };
 }
 
 async function sendText(to: string, body: string) {
-  const accessToken = Deno.env.get('WHATSAPP_ACCESS_TOKEN') || '';
-  const phoneNumberId = Deno.env.get('WHATSAPP_PHONE_NUMBER_ID') || '';
-  const graphVersion = Deno.env.get('WHATSAPP_GRAPH_VERSION') || 'v26.0';
-  if (!accessToken || !phoneNumberId) throw new Error('Credenciais de envio do WhatsApp não configuradas');
+  const { instanceId, instanceToken, clientToken } = zapiCredentials();
   const pieces = String(body).match(/[\s\S]{1,3900}/g) || [];
+  let lastResult: Record<string, any> = {};
   for (const piece of pieces) {
-    const response = await fetch(`https://graph.facebook.com/${graphVersion}/${phoneNumberId}/messages`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'text', text: { preview_url: false, body: piece } }),
-    });
-    if (!response.ok) throw new Error(`Falha ao responder pelo WhatsApp (${response.status})`);
+    const response = await fetch(
+      `https://api.z-api.io/instances/${encodeURIComponent(instanceId)}/token/${encodeURIComponent(instanceToken)}/send-text`,
+      {
+        method: 'POST',
+        headers: { 'Client-Token': clientToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: to, message: piece, delayTyping: 1 }),
+      },
+    );
+    lastResult = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(lastResult?.error || lastResult?.message || `Z-API respondeu ${response.status}`);
   }
+  return lastResult;
 }
 
 function menu(driver: Record<string, any>) {
@@ -56,13 +55,22 @@ function menu(driver: Record<string, any>) {
   return `${data}\n\nComo posso ajudar?\n1 - Tirar uma dúvida\n2 - Falar com um operador\nDigite MENU a qualquer momento para voltar aqui.`;
 }
 
-async function handleMessage(admin: any, message: Record<string, any>) {
-  const waId = digits(message.from);
-  const text = inboundText(message);
-  if (!waId || !message.id || !text) return;
+async function handleMessage(admin: any, payload: Record<string, any>) {
+  if (payload.fromMe || payload.isGroup || payload.isNewsletter || payload.broadcast || payload.notification) return;
+
+  const rawPhone = String(payload.phone || '').trim();
+  const lookupPhone = rawPhone.includes('@lid') ? '' : digits(rawPhone);
+  const contactKey = rawPhone || String(payload.senderLid || '').trim();
+  const text = inboundText(payload);
+  const messageId = String(payload.messageId || '').trim();
+  if (!contactKey || !messageId || !text) return;
 
   const { error: duplicate } = await admin.from('whatsapp_message_events').insert({
-    message_id: message.id, wa_id: waId, direction: 'inbound', payload: message,
+    message_id: messageId,
+    wa_id: contactKey,
+    direction: 'inbound',
+    event_status: String(payload.status || 'RECEIVED'),
+    payload: { provider: 'zapi', ...payload },
   });
   if (duplicate?.code === '23505') return;
   if (duplicate) throw duplicate;
@@ -70,28 +78,31 @@ async function handleMessage(admin: any, message: Record<string, any>) {
   const { data: settings } = await admin.from('whatsapp_bot_settings').select('*').eq('id', true).single();
   if (!settings?.enabled) return;
 
-  const phoneValues = [`+${waId}`, waId];
-  const { data: drivers } = await admin.from('external_driver_directory').select('*')
-    .in('phone_e164', phoneValues).eq('active', true).order('synced_at', { ascending: false }).limit(1);
-  const driver = drivers?.[0] || null;
+  const phoneValues = lookupPhone ? [`+${lookupPhone}`, lookupPhone] : [];
+  let driver = null;
+  if (phoneValues.length) {
+    const { data: drivers } = await admin.from('external_driver_directory').select('*')
+      .in('phone_e164', phoneValues).eq('active', true).order('synced_at', { ascending: false }).limit(1);
+    driver = drivers?.[0] || null;
+  }
 
-  const { data: existingContact } = await admin.from('whatsapp_contacts').select('id').eq('wa_id', waId).maybeSingle();
-
+  const { data: existingContact } = await admin.from('whatsapp_contacts').select('id').eq('wa_id', contactKey).maybeSingle();
   const { data: contact, error: contactError } = await admin.from('whatsapp_contacts').upsert({
-    wa_id: waId,
-    phone_e164: `+${waId}`,
+    wa_id: contactKey,
+    phone_e164: lookupPhone ? `+${lookupPhone}` : contactKey,
     external_driver_id: driver?.id || null,
     last_seen_at: new Date().toISOString(),
+    context: { provider: 'zapi', sender_lid: payload.senderLid || payload.chatLid || null },
   }, { onConflict: 'wa_id' }).select('*').single();
   if (contactError) throw contactError;
 
   if (!driver) {
-    await sendText(waId, settings.unknown_driver_message);
+    await sendText(contactKey, settings.unknown_driver_message);
     return;
   }
 
   if (!existingContact) {
-    await sendText(waId, `${settings.greeting}\n\n${menu(driver)}`);
+    await sendText(contactKey, `${settings.greeting}\n\n${menu(driver)}`);
     return;
   }
 
@@ -105,40 +116,40 @@ async function handleMessage(admin: any, message: Record<string, any>) {
   }
 
   const normalized = text.toLocaleLowerCase('pt-BR');
-  if (normalized === 'menu' || normalized === 'oi' || normalized === 'olá' || normalized === 'ola' || normalized === 'início' || normalized === 'inicio') {
+  if (['menu', 'oi', 'olá', 'ola', 'início', 'inicio'].includes(normalized)) {
     await admin.from('whatsapp_contacts').update({ state: 'menu' }).eq('id', contact.id);
-    await sendText(waId, `${settings.greeting}\n\n${menu(driver)}`);
+    await sendText(contactKey, `${settings.greeting}\n\n${menu(driver)}`);
     return;
   }
 
   if (contact.state === 'awaiting_service') {
     if (normalized === '0') {
       await admin.from('whatsapp_contacts').update({ state: 'menu' }).eq('id', contact.id);
-      await sendText(waId, menu(driver));
+      await sendText(contactKey, menu(driver));
       return;
     }
     const serviceKind = normalized === '1' || normalized.includes('monitor') ? 'monitoring' :
       normalized === '2' || normalized.includes('check') ? 'checklist' : null;
     if (!serviceKind) {
-      await sendText(waId, 'Responda 1 para Monitoramento, 2 para Checklist ou 0 para voltar.');
+      await sendText(contactKey, 'Responda 1 para Monitoramento, 2 para Checklist ou 0 para voltar.');
       return;
     }
     const { data: routes, error } = await admin.rpc('route_whatsapp_chat', { contact_id: contact.id, service_kind: serviceKind });
     if (error) throw error;
     const route = routes?.[0];
-    await sendText(waId, route?.notice || 'Não foi possível iniciar o atendimento agora.');
+    await sendText(contactKey, route?.notice || 'Não foi possível iniciar o atendimento agora.');
     return;
   }
 
   if (normalized === '2' || normalized.includes('operador') || normalized.includes('atendimento')) {
     await admin.from('whatsapp_contacts').update({ state: 'awaiting_service' }).eq('id', contact.id);
-    await sendText(waId, 'Qual atendimento você precisa?\n1 - Monitoramento\n2 - Checklist\n0 - Voltar ao menu');
+    await sendText(contactKey, 'Qual atendimento você precisa?\n1 - Monitoramento\n2 - Checklist\n0 - Voltar ao menu');
     return;
   }
 
   if (normalized === '1') {
     await admin.from('whatsapp_contacts').update({ state: 'question' }).eq('id', contact.id);
-    await sendText(waId, 'Digite sua dúvida. Posso consultar os manuais cadastrados para sua tecnologia.');
+    await sendText(contactKey, 'Digite sua dúvida. Posso consultar os manuais cadastrados para sua tecnologia.');
     return;
   }
 
@@ -150,51 +161,40 @@ async function handleMessage(admin: any, message: Record<string, any>) {
   if (searchError) throw searchError;
   if (answers?.length) {
     const response = answers.map((answer: Record<string, any>) => `${answer.title}\n${answer.excerpt}`).join('\n\n');
-    await sendText(waId, `${response}\n\nSe ainda precisar de ajuda, digite ATENDIMENTO.`);
+    await sendText(contactKey, `${response}\n\nSe ainda precisar de ajuda, digite ATENDIMENTO.`);
   } else {
-    await sendText(waId, settings.fallback_message);
+    await sendText(contactKey, settings.fallback_message);
   }
 }
 
 Deno.serve(async (request) => {
-  const url = new URL(request.url);
   if (request.method === 'GET') {
-    const mode = url.searchParams.get('hub.mode');
-    const token = url.searchParams.get('hub.verify_token');
-    const challenge = url.searchParams.get('hub.challenge') || '';
-    if (mode === 'subscribe' && token === Deno.env.get('WHATSAPP_VERIFY_TOKEN')) {
-      return new Response(challenge, { status: 200, headers: { 'Content-Type': 'text/plain' } });
-    }
-    return new Response('Token de verificação inválido', { status: 403 });
+    return new Response(JSON.stringify({ ok: true, provider: 'zapi' }), { status: 200, headers: jsonHeaders });
   }
   if (request.method !== 'POST') return new Response('Método inválido', { status: 405 });
 
-  const rawBody = await request.text();
-  if (!await validSignature(request, rawBody)) return new Response('Assinatura inválida', { status: 401 });
-
   try {
-    const payload = JSON.parse(rawBody);
+    const payload = await request.json();
+    const configuredSecret = Deno.env.get('ZAPI_WEBHOOK_SECRET') || '';
+    const suppliedSecret = new URL(request.url).searchParams.get('secret') || '';
+    if (configuredSecret && suppliedSecret !== configuredSecret) {
+      return new Response(JSON.stringify({ error: 'Webhook não autorizado' }), { status: 401, headers: jsonHeaders });
+    }
+    const expectedInstance = Deno.env.get('ZAPI_INSTANCE_ID') || '';
+    if (expectedInstance && payload.instanceId && payload.instanceId !== expectedInstance) {
+      return new Response(JSON.stringify({ error: 'Instância não autorizada' }), { status: 401, headers: jsonHeaders });
+    }
+
     const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, {
       auth: { persistSession: false },
     });
-    for (const entry of payload.entry || []) {
-      for (const change of entry.changes || []) {
-        for (const message of change.value?.messages || []) await handleMessage(admin, message);
-        for (const status of change.value?.statuses || []) {
-          if (!status.id) continue;
-          await admin.from('whatsapp_message_events').upsert({
-            message_id: `${status.id}:${status.status}`,
-            wa_id: digits(status.recipient_id),
-            direction: 'status',
-            event_status: status.status,
-            payload: status,
-          });
-        }
-      }
-    }
-    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: cors });
+    await handleMessage(admin, payload);
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: jsonHeaders });
   } catch (error) {
     console.error(error);
-    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Falha no webhook' }), { status: 500, headers: cors });
+    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Falha no webhook' }), {
+      status: 500,
+      headers: jsonHeaders,
+    });
   }
 });
