@@ -7,6 +7,7 @@ import {
   parseCommandResponse,
   safeSuccessMessage,
 } from '../_shared/unlock-core.mjs';
+import { sendGreenApiText } from '../_shared/green-api.ts';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -33,15 +34,8 @@ async function simulatorRequest(path: string, init: RequestInit = {}) {
 }
 
 async function sendText(to: string, message: string) {
-  const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || '';
-  const instanceToken = Deno.env.get('ZAPI_INSTANCE_TOKEN') || '';
-  const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || '';
-  if (!instanceId || !instanceToken || !clientToken || !to) return;
-  const response = await fetch(
-    `https://api.z-api.io/instances/${encodeURIComponent(instanceId)}/token/${encodeURIComponent(instanceToken)}/send-text`,
-    { method: 'POST', headers: { 'Client-Token': clientToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: to, message, delayTyping: 1 }) },
-  );
-  if (!response.ok) throw new Error(`Não foi possível enviar a resposta ao WhatsApp (${response.status})`);
+  if (!to) return;
+  await sendGreenApiText(to, message);
 }
 
 async function recordMessage(admin: any, requestRow: Record<string, any>, message: string) {
@@ -150,6 +144,10 @@ Deno.serve(async (request) => {
       command_sent_at: new Date().toISOString(), completed_at: new Date().toISOString(),
       command_result: resultPayload, updated_at: new Date().toISOString(),
     }).eq('id', requestRow.id);
+    await admin.from('whatsapp_contacts').update({
+      state: 'post_command',
+      last_seen_at: new Date().toISOString(),
+    }).eq('id', requestRow.whatsapp_contact_id);
     await recordMessage(admin, requestRow, message);
     return new Response(JSON.stringify({ ok: true, status: UNLOCK_STATES.SENT, message }), { headers });
   } catch (error) {

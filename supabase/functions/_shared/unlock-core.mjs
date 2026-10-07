@@ -82,7 +82,7 @@ export async function runUnlockCommand({ checkAlerts, sendCommand }) {
 }
 
 export function safeSuccessMessage(plate) {
-  return `✓ O comando de desbloqueio foi enviado para o veículo ${plate}.\n\nAguarde alguns instantes para a atualização.`;
+  return `✓ O comando de desbloqueio foi enviado para o veículo ${plate}.\n\nAguarde alguns instantes para a atualização.\n\nPrecisa de ajuda com algo mais?\n1 - Sim\n2 - Não`;
 }
 
 export const ACTIVE_ALERT_MESSAGE = 'Identifiquei uma ocorrência/alerta ativo relacionado ao seu veículo.\n\nPara sua segurança, não vou enviar o comando de desbloqueio automaticamente.\n\nAguarde um momento. Vou transferir seu atendimento para um operador para realizar a tratativa.';

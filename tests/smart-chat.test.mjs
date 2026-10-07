@@ -145,24 +145,49 @@ test('WhatsApp migration decommissions mobile auth without deleting chat history
   assert.doesNotMatch(sql, /drop table.*checklist_chat_messages_v2/i);
 });
 
-test('Z-API webhook validates instance and secret and routes support', () => {
+test('GREEN-API webhook validates instance and secret and routes support', () => {
   const webhook = read('supabase/functions/whatsapp-webhook/index.ts');
-  assert.match(webhook, /ZAPI_INSTANCE_ID/);
-  assert.match(webhook, /ZAPI_WEBHOOK_SECRET/);
-  assert.match(webhook, /api\.z-api\.io/);
-  assert.match(webhook, /text\?\.message/);
+  const provider = read('supabase/functions/_shared/green-api.ts');
+  assert.match(webhook, /GREEN_API_ID_INSTANCE/);
+  assert.match(webhook, /GREEN_API_WEBHOOK_TOKEN/);
+  assert.match(provider, /api\.green-api\.com/);
+  assert.match(webhook, /textMessageData\?\.textMessage/);
+  assert.match(webhook, /incomingMessageReceived/);
   assert.match(webhook, /route_whatsapp_chat/);
   assert.match(webhook, /search_bot_manuals/);
   assert.match(webhook, /external_driver_directory/);
 });
 
 test('WhatsApp routing skips unavailable operators and randomly selects an available operator from the base', () => {
-  const sql = read('supabase/027_random_operator_routing.sql');
+  const sql = read('supabase/031_live_operator_presence_and_command_routing.sql');
   assert.match(sql, /bo\.base_id=target_base/);
   assert.match(sql, /operator_enabled/);
-  assert.match(sql, /last_seen_at>now\(\)-interval '5 minutes'/);
+  assert.match(sql, /p\.chat_available/);
+  assert.match(sql, /p\.chat_presence_at>now\(\)-interval '75 seconds'/);
   assert.match(sql, /order by random\(\)/);
-  assert.doesNotMatch(sql, /order by\s*\(\s*select count/i);
+  assert.doesNotMatch(sql, /operador habilitado e aparece quando ele entrar/i);
+});
+
+test('operator presence follows the visible authenticated panel and stale chats are reassigned', () => {
+  const panel = read('painel/app.js');
+  const sql = read('supabase/031_live_operator_presence_and_command_routing.sql');
+  assert.match(panel, /set_chat_presence/);
+  assert.match(panel, /visibilitychange/);
+  assert.match(panel, /pagehide/);
+  assert.match(panel, /20000/);
+  assert.match(sql, /chat_available=false/);
+  assert.match(sql, /for update of s skip locked/);
+  assert.match(sql, /operator_id=current_user_id/);
+});
+
+test('bot menu offers vehicle command and asks whether the driver needs more help', () => {
+  const webhook = read('supabase/functions/whatsapp-webhook/index.ts');
+  const core = read('supabase/functions/_shared/unlock-core.mjs');
+  assert.match(webhook, /3 - Enviar comando ao veículo/);
+  assert.match(webhook, /state: 'awaiting_command'/);
+  assert.match(webhook, /state: 'post_command'/);
+  assert.match(webhook, /state: 'closed'/);
+  assert.match(core, /Precisa de ajuda com algo mais/);
 });
 
 test('operator replies are sent to WhatsApp and bot manuals are manageable', () => {
@@ -172,9 +197,9 @@ test('operator replies are sent to WhatsApp and bot manuals are manageable', () 
   assert.match(panel, /renderBot/);
   assert.match(panel, /manualTextFromFile/);
   assert.match(panel, /bot_manuals/);
-  assert.match(sender, /ZAPI_INSTANCE_TOKEN/);
-  assert.match(sender, /Client-Token/);
-  assert.match(sender, /api\.z-api\.io/);
+  assert.match(sender, /sendGreenApiText/);
+  assert.match(read('supabase/functions/_shared/green-api.ts'), /GREEN_API_TOKEN_INSTANCE/);
+  assert.match(read('supabase/functions/_shared/green-api.ts'), /sendMessage/);
   assert.equal(fs.existsSync(path.join(root, 'supabase/functions/send-chat-push')), false);
 });
 

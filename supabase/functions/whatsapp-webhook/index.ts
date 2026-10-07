@@ -10,6 +10,7 @@ import {
   safeSuccessMessage,
   validateCpfCredential,
 } from '../_shared/unlock-core.mjs';
+import { sendGreenApiText } from '../_shared/green-api.ts';
 
 const jsonHeaders = { 'Content-Type': 'application/json' };
 
@@ -19,33 +20,18 @@ function digits(value: unknown) {
 
 function inboundText(payload: Record<string, any>) {
   return String(
+    payload.messageData?.textMessageData?.textMessage ||
+    payload.messageData?.extendedTextMessageData?.text ||
+    payload.messageData?.buttonsResponseMessage?.selectedButtonId ||
+    payload.messageData?.listResponseMessage?.singleSelectReply?.selectedRowId ||
     payload.text?.message || payload.buttonsResponseMessage?.message ||
     payload.buttonsResponseMessage?.buttonId || payload.listResponseMessage?.title ||
     payload.listResponseMessage?.message || payload.listResponseMessage?.selectedRowId || '',
   ).trim();
 }
 
-function zapiCredentials() {
-  const instanceId = Deno.env.get('ZAPI_INSTANCE_ID') || '';
-  const instanceToken = Deno.env.get('ZAPI_INSTANCE_TOKEN') || '';
-  const clientToken = Deno.env.get('ZAPI_CLIENT_TOKEN') || '';
-  if (!instanceId || !instanceToken || !clientToken) throw new Error('Credenciais da Z-API não configuradas');
-  return { instanceId, instanceToken, clientToken };
-}
-
 async function sendText(to: string, body: string) {
-  const { instanceId, instanceToken, clientToken } = zapiCredentials();
-  const pieces = String(body).match(/[\s\S]{1,3900}/g) || [];
-  let lastResult: Record<string, any> = {};
-  for (const piece of pieces) {
-    const response = await fetch(
-      `https://api.z-api.io/instances/${encodeURIComponent(instanceId)}/token/${encodeURIComponent(instanceToken)}/send-text`,
-      { method: 'POST', headers: { 'Client-Token': clientToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: to, message: piece, delayTyping: 1 }) },
-    );
-    lastResult = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(lastResult?.error || lastResult?.message || `Z-API respondeu ${response.status}`);
-  }
-  return lastResult;
+  return sendGreenApiText(to, body);
 }
 
 function simulatorCredentials() {
@@ -86,7 +72,7 @@ function menu(driver: Record<string, any>) {
     driver.vehicle_plate ? `Placa: ${driver.vehicle_plate}` : null,
     driver.technology ? `Tecnologia: ${driver.technology}` : null,
   ].filter(Boolean).join('\n');
-  return `${data}\n\nComo posso ajudar?\n1 - Tirar uma dúvida\n2 - Falar com um operador\nDigite MENU a qualquer momento para voltar aqui.`;
+  return `${data}\n\nComo posso ajudar?\n1 - Tirar uma dúvida\n2 - Falar com um operador\n3 - Enviar comando ao veículo\nDigite MENU a qualquer momento para voltar aqui.`;
 }
 
 async function updateContact(admin: any, contact: Record<string, any>, values: Record<string, any>) {
@@ -199,6 +185,7 @@ async function handleUnlockAuthentication(admin: any, contact: Record<string, an
 
 async function executeAutomaticUnlock(admin: any, contact: Record<string, any>, requestRow: Record<string, any>) {
   if (requestRow.status === UNLOCK_STATES.SENT) {
+    await updateContact(admin, contact, { state: 'post_command', context: { unlock_request_id: null, unlock_auth_attempts: 0 } });
     await sendText(contact.wa_id, safeSuccessMessage(requestRow.plate));
     return;
   }
@@ -214,7 +201,10 @@ async function executeAutomaticUnlock(admin: any, contact: Record<string, any>, 
     }).eq('id', requestRow.id).eq('status', UNLOCK_STATES.AWAITING_CONFIRMATION).select('id').maybeSingle();
     if (!claimed) {
       const { data: current } = await admin.from('vehicle_unlock_requests').select('status').eq('id', requestRow.id).single();
-      if (current?.status === UNLOCK_STATES.SENT) await sendText(contact.wa_id, safeSuccessMessage(requestRow.plate));
+      if (current?.status === UNLOCK_STATES.SENT) {
+        await updateContact(admin, contact, { state: 'post_command', context: { unlock_request_id: null, unlock_auth_attempts: 0 } });
+        await sendText(contact.wa_id, safeSuccessMessage(requestRow.plate));
+      }
       return;
     }
     const resultPayload = await sendUnlockCommand(requestRow);
@@ -234,7 +224,7 @@ async function executeAutomaticUnlock(admin: any, contact: Record<string, any>, 
       command_sent_at: new Date().toISOString(), completed_at: new Date().toISOString(),
       command_result: resultPayload, updated_at: new Date().toISOString(),
     }).eq('id', requestRow.id);
-    await updateContact(admin, contact, { state: 'menu', context: { unlock_request_id: null, unlock_auth_attempts: 0 } });
+    await updateContact(admin, contact, { state: 'post_command', context: { unlock_request_id: null, unlock_auth_attempts: 0 } });
     await sendText(contact.wa_id, safeSuccessMessage(requestRow.plate));
   } catch (error) {
     await failAndTransfer(admin, { ...requestRow, wa_id: contact.wa_id }, `Falha na API do simulador: ${error instanceof Error ? error.message : 'erro desconhecido'}.`);
@@ -265,12 +255,13 @@ async function handleUnlockConfirmation(admin: any, contact: Record<string, any>
 }
 
 async function handleMessage(admin: any, payload: Record<string, any>) {
-  if (payload.fromMe || payload.isGroup || payload.isNewsletter || payload.broadcast || payload.notification) return;
-  const rawPhone = String(payload.phone || '').trim();
-  const lookupPhone = rawPhone.includes('@lid') ? '' : digits(rawPhone);
-  const contactKey = rawPhone || String(payload.senderLid || '').trim();
+  if (payload.typeWebhook !== 'incomingMessageReceived') return;
+  const rawChatId = String(payload.senderData?.chatId || payload.senderData?.sender || '').trim();
+  if (!rawChatId || rawChatId.endsWith('@g.us')) return;
+  const lookupPhone = digits(rawChatId);
+  const contactKey = lookupPhone;
   const text = inboundText(payload);
-  const messageId = String(payload.messageId || '').trim();
+  const messageId = String(payload.idMessage || '').trim();
   if (!contactKey || !messageId || !text) return;
 
   const { data: existingContact } = await admin.from('whatsapp_contacts').select('*').eq('wa_id', contactKey).maybeSingle();
@@ -279,8 +270,8 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
     message_id: messageId, wa_id: contactKey, direction: 'inbound',
     event_status: String(payload.status || 'RECEIVED'),
     payload: protectedCredential
-      ? { provider: 'zapi', message_id: messageId, credential_redacted: true }
-      : { provider: 'zapi', ...payload },
+      ? { provider: 'green-api', message_id: messageId, credential_redacted: true }
+      : { provider: 'green-api', ...payload },
   });
   if (duplicate?.code === '23505') return;
   if (duplicate) throw duplicate;
@@ -302,13 +293,13 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
       phone_e164: lookupPhone ? `+${lookupPhone}` : contactKey,
       external_driver_id: driver?.id || existingContact.external_driver_id || null,
       last_seen_at: new Date().toISOString(),
-      context: { provider: 'zapi', sender_lid: payload.senderLid || payload.chatLid || null },
+      context: { provider: 'green-api', green_api_chat_id: rawChatId },
     });
   } else {
     const { data, error } = await admin.from('whatsapp_contacts').insert({
       wa_id: contactKey, phone_e164: lookupPhone ? `+${lookupPhone}` : contactKey,
       external_driver_id: driver?.id || null, last_seen_at: new Date().toISOString(),
-      context: { provider: 'zapi', sender_lid: payload.senderLid || payload.chatLid || null },
+      context: { provider: 'green-api', green_api_chat_id: rawChatId },
     }).select('*').single();
     if (error) throw error;
     contact = data;
@@ -336,6 +327,35 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
     await handleUnlockConfirmation(admin, contact, text);
     return;
   }
+  if (contact.state === 'post_command') {
+    const answer = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+    if (answer === '1' || answer === 'sim' || answer === 's') {
+      await updateContact(admin, contact, { state: 'menu' });
+      await sendText(contactKey, menu(driver));
+      return;
+    }
+    if (answer === '2' || answer === 'nao' || answer === 'n') {
+      await updateContact(admin, contact, { state: 'closed' });
+      await sendText(contactKey, 'Atendimento encerrado. Quando precisar, envie uma nova mensagem para começar novamente.');
+      return;
+    }
+    await sendText(contactKey, 'Responda 1 para SIM ou 2 para NÃO.');
+    return;
+  }
+  if (contact.state === 'awaiting_command') {
+    const answer = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+    if (answer === '0' || answer === 'voltar' || answer === 'menu') {
+      await updateContact(admin, contact, { state: 'menu' });
+      await sendText(contactKey, menu(driver));
+      return;
+    }
+    if (answer === '1' || isUnlockIntent(text)) {
+      await startUnlockFlow(admin, contact, driver, text);
+      return;
+    }
+    await sendText(contactKey, 'Qual comando deseja enviar?\n1 - Desbloqueio do veículo\n0 - Voltar ao menu');
+    return;
+  }
   if (isUnlockIntent(text)) {
     await startUnlockFlow(admin, contact, driver, text);
     return;
@@ -346,6 +366,11 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
   }
 
   const normalized = text.toLocaleLowerCase('pt-BR');
+  if (contact.state === 'closed') {
+    await updateContact(admin, contact, { state: 'menu' });
+    await sendText(contactKey, `${settings.greeting}\n\n${menu(driver)}`);
+    return;
+  }
   if (['menu', 'oi', 'olá', 'ola', 'início', 'inicio'].includes(normalized)) {
     await updateContact(admin, contact, { state: 'menu', context: { unlock_request_id: null, unlock_auth_attempts: 0 } });
     await sendText(contactKey, `${settings.greeting}\n\n${menu(driver)}`);
@@ -373,6 +398,11 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
     await sendText(contactKey, 'Qual atendimento você precisa?\n1 - Monitoramento\n2 - Checklist\n0 - Voltar ao menu');
     return;
   }
+  if (normalized === '3' || normalized.includes('comando')) {
+    await updateContact(admin, contact, { state: 'awaiting_command' });
+    await sendText(contactKey, 'Qual comando deseja enviar?\n1 - Desbloqueio do veículo\n0 - Voltar ao menu');
+    return;
+  }
   if (normalized === '1') {
     await updateContact(admin, contact, { state: 'question' });
     await sendText(contactKey, 'Digite sua dúvida. Posso consultar os manuais cadastrados para sua tecnologia.');
@@ -392,15 +422,22 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
 }
 
 Deno.serve(async (request) => {
-  if (request.method === 'GET') return new Response(JSON.stringify({ ok: true, provider: 'zapi' }), { status: 200, headers: jsonHeaders });
+  if (request.method === 'GET') return new Response(JSON.stringify({ ok: true, provider: 'green-api' }), { status: 200, headers: jsonHeaders });
   if (request.method !== 'POST') return new Response('Método inválido', { status: 405 });
   try {
     const payload = await request.json();
-    const configuredSecret = Deno.env.get('ZAPI_WEBHOOK_SECRET') || '';
+    const configuredSecret = Deno.env.get('GREEN_API_WEBHOOK_TOKEN') || '';
+    const expectedInstance = Deno.env.get('GREEN_API_ID_INSTANCE') || '';
+    if (!configuredSecret || !expectedInstance) {
+      return new Response(JSON.stringify({ error: 'Integração GREEN-API ainda não configurada' }), { status: 503, headers: jsonHeaders });
+    }
+    const authorization = request.headers.get('Authorization') || '';
     const suppliedSecret = new URL(request.url).searchParams.get('secret') || '';
-    if (configuredSecret && suppliedSecret !== configuredSecret) return new Response(JSON.stringify({ error: 'Webhook não autorizado' }), { status: 401, headers: jsonHeaders });
-    const expectedInstance = Deno.env.get('ZAPI_INSTANCE_ID') || '';
-    if (expectedInstance && payload.instanceId && payload.instanceId !== expectedInstance) return new Response(JSON.stringify({ error: 'Instância não autorizada' }), { status: 401, headers: jsonHeaders });
+    const authorized = authorization === `Bearer ${configuredSecret}` || suppliedSecret === configuredSecret;
+    if (!authorized) return new Response(JSON.stringify({ error: 'Webhook não autorizado' }), { status: 401, headers: jsonHeaders });
+    if (String(payload.instanceData?.idInstance || '') !== expectedInstance) {
+      return new Response(JSON.stringify({ error: 'Instância não autorizada' }), { status: 401, headers: jsonHeaders });
+    }
     const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, { auth: { persistSession: false } });
     await handleMessage(admin, payload);
     return new Response(JSON.stringify({ ok: true }), { status: 200, headers: jsonHeaders });

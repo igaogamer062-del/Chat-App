@@ -85,6 +85,8 @@
 
   $('logout').onclick = async () => {
     clearInterval(queuePoll);
+    clearInterval(boot.heartbeat);
+    await sb.rpc('set_chat_presence', { is_available: false });
     await sb.auth.signOut();
     me = null; perms = {};
     $('app-screen').hidden = true;
@@ -104,10 +106,20 @@
     $('who-role').textContent = me.access_role;
     $('who-avatar').textContent = (me.full_name || me.username || 'U').trim().charAt(0).toUpperCase();
     buildTabs();
-    await sb.rpc('touch_presence');
+    await sb.rpc('set_chat_presence', { is_available: document.visibilityState === 'visible' });
     clearInterval(boot.heartbeat);
-    boot.heartbeat = setInterval(() => sb.rpc('touch_presence'), 45000);
+    boot.heartbeat = setInterval(() => {
+      if (document.visibilityState === 'visible') sb.rpc('touch_presence');
+    }, 20000);
   }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!me) return;
+    sb.rpc('set_chat_presence', { is_available: document.visibilityState === 'visible' });
+  });
+  window.addEventListener('pagehide', () => {
+    if (me) sb.rpc('set_chat_presence', { is_available: false });
+  });
 
   function buildTabs() {
     const list = [];
@@ -646,17 +658,17 @@
     ]);
     const webhookUrl = cfg.url + '/functions/v1/whatsapp-webhook';
     $('view').innerHTML =
-      '<div class="page-head"><div><span class="page-kicker">ATENDIMENTO AUTOMÁTICO</span><h1>Bot do WhatsApp</h1><p>Configure as respostas iniciais, publique manuais e acompanhe a conexão usada pela Z-API.</p></div></div>' +
+      '<div class="page-head"><div><span class="page-kicker">ATENDIMENTO AUTOMÁTICO</span><h1>Bot do WhatsApp</h1><p>Configure as respostas iniciais, publique manuais e acompanhe a conexão usada pela GREEN-API.</p></div></div>' +
       '<div class="grid cols-2 bot-grid">' +
       '<section class="card"><h2>Funcionamento do bot</h2><label class="bot-switch"><input id="bot-enabled" type="checkbox"' + (settings.enabled ? ' checked' : '') + '><span>Bot ativo para novas mensagens</span></label>' +
       '<div class="form-row"><label>Saudação</label><textarea id="bot-greeting" rows="3">' + esc(settings.greeting) + '</textarea></div>' +
       '<div class="form-row"><label>Telefone não localizado</label><textarea id="bot-unknown" rows="3">' + esc(settings.unknown_driver_message) + '</textarea></div>' +
       '<div class="form-row"><label>Resposta quando o manual não ajudar</label><textarea id="bot-fallback" rows="3">' + esc(settings.fallback_message) + '</textarea></div>' +
       '<button class="btn primary" id="save-bot-settings">Salvar configuração</button></section>' +
-      '<section class="card"><h2>Conexão Z-API</h2><p class="card-subtitle">Use este endereço como webhook de mensagens recebidas. Acrescente o segredo ao final durante a configuração.</p>' +
+      '<section class="card"><h2>Conexão GREEN-API</h2><p class="card-subtitle">Use este endereço no campo Webhook URL da instância. O token de proteção é configurado separadamente nos Secrets.</p>' +
       '<div class="webhook-address"><code>' + esc(webhookUrl) + '</code><button class="btn small" id="copy-webhook">Copiar</button></div>' +
       '<div class="bot-flow"><b>Fluxo operacional</b><span>Mensagem → identificação pelo telefone → consulta aos manuais ou transferência → operador da base correta.</span></div>' +
-      '<p class="card-subtitle">ID da instância, token da instância, Client-Token e segredo do webhook ficam somente nos Secrets das Edge Functions.</p></section>' +
+      '<p class="card-subtitle">URL da API, ID da instância, token da instância e token do webhook ficam somente nos Secrets das Edge Functions.</p></section>' +
       '</div>' +
       '<section class="card" style="margin-top:16px"><div class="manual-head"><div><h2>Manuais das tecnologias</h2><p class="card-subtitle">Aceita TXT e PDF com texto selecionável. O bot pesquisa o conteúdo antes de oferecer atendimento humano.</p></div></div>' +
       '<div class="manual-form"><div class="form-row"><label>Título</label><input id="manual-title" placeholder="Ex.: Manual Omnilink"></div>' +
