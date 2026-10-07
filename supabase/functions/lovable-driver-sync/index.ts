@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { cpfLast4, credentialHash } from '../_shared/unlock-core.mjs';
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -63,6 +64,15 @@ function fieldNames(source: unknown, prefix = '', depth = 0): string[] {
   }).sort();
 }
 
+function redactSensitive(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactSensitive);
+  const object = asRecord(value);
+  if (!object) return value;
+  return Object.fromEntries(Object.entries(object)
+    .filter(([key]) => !['cpf', 'document', 'document_number', 'senha', 'password'].includes(key.toLocaleLowerCase('pt-BR')))
+    .map(([key, nested]) => [key, redactSensitive(nested)]));
+}
+
 function driverIdentity(source: JsonRecord) {
   return {
     ids: [firstText(source, ['id', 'driver_id', 'driverId', 'external_id', 'uuid', 'codigo', 'driver.id', 'condutor.id'])]
@@ -99,7 +109,12 @@ function findAssignment(driver: JsonRecord, assignments: JsonRecord[]) {
   return assignments.find((assignment) => referencesDriver(assignment, driver)) || null;
 }
 
-function findVehicle(driver: JsonRecord, vehicles: JsonRecord[], assignment: JsonRecord | null) {
+function findVehicle(driver: JsonRecord, vehicles: JsonRecord[], assignment: JsonRecord | null, knownPlate: string | null = null) {
+  const storedPlate = normalizedKey(knownPlate);
+  if (storedPlate) {
+    const storedMatch = vehicles.find((vehicle) => normalizedKey(firstText(vehicle, ['plate', 'vehicle_plate', 'vehiclePlate', 'placa'])) === storedPlate);
+    if (storedMatch) return storedMatch;
+  }
   if (assignment) {
     const assignmentVehicleId = normalizedKey(firstText(assignment, [
       'vehicle_id', 'vehicleId', 'vehicle.id', 'veiculo_id', 'veiculoId', 'veiculo.id',
@@ -143,7 +158,7 @@ function findVehicle(driver: JsonRecord, vehicles: JsonRecord[], assignment: Jso
   return sameCarrier.length === 1 ? sameCarrier[0] : null;
 }
 
-function normalizeDriver(row: JsonRecord, assignment: JsonRecord | null, vehicle: JsonRecord | null, index: number) {
+async function normalizeDriver(row: JsonRecord, assignment: JsonRecord | null, vehicle: JsonRecord | null, index: number, pepper: string) {
   const sources = [row, ...(assignment ? [assignment] : []), ...(vehicle ? [vehicle] : [])];
   const fullName = firstTextFrom(sources, [
     'full_name', 'fullName', 'name', 'driver_name', 'driverName', 'nome', 'nome_completo', 'driver', 'driver.name', 'condutor.nome',
@@ -161,6 +176,8 @@ function normalizeDriver(row: JsonRecord, assignment: JsonRecord | null, vehicle
     'driver.phone', 'condutor.telefone', 'condutor.celular',
   ]);
   const phoneDigits = String(rawPhone || '').replace(/\D/g, '');
+  const cpf = firstText(row, ['cpf', 'document', 'document_number', 'driver.cpf', 'condutor.cpf']);
+  const last4 = cpfLast4(cpf);
   return {
     provider: 'lovable-alert-hub',
     external_id: externalId,
@@ -175,8 +192,12 @@ function normalizeDriver(row: JsonRecord, assignment: JsonRecord | null, vehicle
       'tracking_technology', 'trackingTechnology', 'tecnologia', 'tracker', 'tracker.name', 'tracker.technology',
       'rastreador', 'rastreador.nome', 'rastreador.tecnologia', 'veiculo.tecnologia',
     ]),
+    external_vehicle_id: firstTextFrom([...(vehicle ? [vehicle] : []), ...(assignment ? [assignment] : [])], [
+      'id', 'vehicle_id', 'vehicleId', 'uuid', 'codigo', 'vehicle.id', 'veiculo.id', 'veiculo_id', 'veiculoId',
+    ]),
+    cpf_last4_hash: last4 ? await credentialHash(last4, pepper) : null,
     active: row.active !== false && row.ativo !== false && row.status !== 'inactive' && row.status !== 'inativo',
-    raw_payload: { driver: row, assignment, vehicle },
+    raw_payload: redactSensitive({ driver: row, assignment, vehicle }),
     synced_at: new Date().toISOString(),
   };
 }
@@ -192,6 +213,7 @@ Deno.serve(async (request) => {
     const driversPath = Deno.env.get('LOVABLE_DRIVERS_PATH') || '/api/public/v1/drivers';
     const vehiclesPath = Deno.env.get('LOVABLE_VEHICLES_PATH') || '/api/public/v1/vehicles';
     const assignmentsPath = Deno.env.get('LOVABLE_ASSIGNMENTS_PATH') || '/api/public/v1/reports';
+    const authPepper = Deno.env.get('SMART_CHAT_AUTH_PEPPER') || '';
     if (!externalBase || !externalKey) throw new Error('Configure LOVABLE_API_BASE_URL e LOVABLE_API_KEY nos segredos do Supabase');
 
     const authorization = request.headers.get('Authorization') || '';
@@ -223,10 +245,20 @@ Deno.serve(async (request) => {
     });
     if (assignmentsResponse.ok) assignments = listFromPayload(await assignmentsResponse.json());
 
-    const normalized = rows.map((row, index) => {
+    const sourceExternalIds = rows.map((row) => firstText(row, ['id', 'driver_id', 'driverId', 'external_id', 'uuid', 'codigo', 'driver.id'])).filter(Boolean) as string[];
+    const { data: existingRows, error: existingError } = await admin.from('external_driver_directory')
+      .select('external_id,carrier_id,carrier_name,vehicle_plate,technology,external_vehicle_id,cpf_last4_hash')
+      .eq('provider', 'lovable-alert-hub')
+      .in('external_id', sourceExternalIds);
+    if (existingError) throw existingError;
+    const existingById = new Map((existingRows || []).map((row) => [row.external_id, row]));
+
+    const normalized = (await Promise.all(rows.map((row, index) => {
       const assignment = findAssignment(row, assignments);
-      return normalizeDriver(row, assignment, findVehicle(row, vehicles, assignment), index);
-    }).filter(
+      const externalId = firstText(row, ['id', 'driver_id', 'driverId', 'external_id', 'uuid', 'codigo', 'driver.id']);
+      const existing = externalId ? existingById.get(externalId) : null;
+      return normalizeDriver(row, assignment, findVehicle(row, vehicles, assignment, existing?.vehicle_plate || null), index, authPepper);
+    }))).filter(
       (row): row is NonNullable<ReturnType<typeof normalizeDriver>> => row !== null,
     );
     const ignored = rows.length - normalized.length;
@@ -250,12 +282,6 @@ Deno.serve(async (request) => {
         return compatible.length === 1 ? compatible[0][1] : null;
       })() : null,
     }));
-    const { data: existingRows, error: existingError } = await admin.from('external_driver_directory')
-      .select('external_id,carrier_id,carrier_name,vehicle_plate,technology')
-      .eq('provider', 'lovable-alert-hub')
-      .in('external_id', prepared.map((row) => row.external_id));
-    if (existingError) throw existingError;
-    const existingById = new Map((existingRows || []).map((row) => [row.external_id, row]));
     const upserts = prepared.map((row) => {
       const existing = existingById.get(row.external_id);
       return {
@@ -264,6 +290,8 @@ Deno.serve(async (request) => {
         carrier_name: row.carrier_name || existing?.carrier_name || null,
         vehicle_plate: row.vehicle_plate || existing?.vehicle_plate || null,
         technology: row.technology || existing?.technology || null,
+        external_vehicle_id: row.external_vehicle_id || existing?.external_vehicle_id || null,
+        cpf_last4_hash: row.cpf_last4_hash || existing?.cpf_last4_hash || null,
       };
     });
     const { error: upsertError } = await admin.from('external_driver_directory').upsert(upserts, { onConflict: 'provider,external_id' });

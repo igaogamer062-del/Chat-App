@@ -184,7 +184,7 @@
     loadThread(session.id);
   }
 
-  function renderSessionDetails(s) {
+  async function renderSessionDetails(s) {
     const panel = $('conversation-details');
     if (!panel) return;
     const initials = String(s.driver_name || 'C').trim().split(/\s+/).slice(0, 2).map((part) => part.charAt(0)).join('').toUpperCase();
@@ -195,6 +195,38 @@
       '<div class="details-card"><span>Tecnologia</span><b>' + esc(s.technology || 'Não informada') + '</b></div>' +
       '<div class="details-card"><span>Iniciado em</span><b>' + new Date(s.created_at).toLocaleString('pt-BR') + '</b></div>' +
       '<div class="details-card"><span>Situação</span><b class="online-label"><i></i>Em atendimento</b></div>';
+    const { data: unlockRequest } = await sb.from('vehicle_unlock_requests').select('*').eq('session_id', s.id).maybeSingle();
+    if (!unlockRequest || !selectedSession || selectedSession.id !== s.id) return;
+    const statusLabels = {
+      BLOCKED_BY_ACTIVE_ALERT: 'Bloqueado por alerta ativo',
+      COMMAND_FAILED: 'Falha no comando',
+      TRANSFERRED_TO_OPERATOR: 'Transferido ao operador',
+      COMMAND_SENT_TO_VEHICLE: 'Comando enviado ao veículo',
+    };
+    panel.insertAdjacentHTML('beforeend',
+      '<div class="details-title" style="margin-top:18px">Desbloqueio</div>' +
+      '<div class="details-card"><span>Request ID</span><b>' + esc(unlockRequest.request_id) + '</b></div>' +
+      '<div class="details-card"><span>Status</span><b>' + esc(statusLabels[unlockRequest.status] || unlockRequest.status) + '</b></div>' +
+      '<div class="details-card"><span>Alerta ativo</span><b>' + (unlockRequest.has_active_alert ? 'Sim' : 'Não identificado') + '</b></div>' +
+      (unlockRequest.alert_types && unlockRequest.alert_types.length ? '<div class="details-card"><span>Tipo do alerta</span><b>' + esc(unlockRequest.alert_types.join(', ')) + '</b></div>' : '') +
+      (unlockRequest.handoff_reason ? '<div class="details-card"><span>Motivo</span><b>' + esc(unlockRequest.handoff_reason) + '</b></div>' : '') +
+      (unlockRequest.status !== 'COMMAND_SENT_TO_VEHICLE' ? '<button class="btn primary" id="operator-unlock-now" style="width:100%;margin-top:12px">Desbloquear agora</button>' : '')
+    );
+    const unlockButton = $('operator-unlock-now');
+    if (unlockButton) unlockButton.onclick = async () => {
+      unlockButton.disabled = true;
+      try {
+        const { data, error } = await sb.functions.invoke('vehicle-unlock', { body: { unlock_request_id: unlockRequest.id } });
+        if (error) throw error;
+        toast(data.message || (data.ok ? 'Comando enviado.' : 'Desbloqueio impedido.'));
+        await renderSessionDetails(s);
+        await refreshThreadMessages(s.id, true);
+      } catch (error) {
+        toast(error.message || 'Não foi possível solicitar o desbloqueio.');
+      } finally {
+        if (document.body.contains(unlockButton)) unlockButton.disabled = false;
+      }
+    };
   }
 
   async function loadThread(sessionId) {
