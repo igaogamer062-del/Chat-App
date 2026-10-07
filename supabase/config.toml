@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.vehicle-unlock]
 verify_jwt = true
+
+[functions.tracking-simulator]
+verify_jwt = false

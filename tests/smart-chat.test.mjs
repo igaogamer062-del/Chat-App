@@ -180,14 +180,38 @@ test('operator presence follows the visible authenticated panel and stale chats 
   assert.match(sql, /operator_id=current_user_id/);
 });
 
-test('bot menu offers vehicle command and asks whether the driver needs more help', () => {
+test('bot converses first and only shows options or driver data when requested', async () => {
   const webhook = read('supabase/functions/whatsapp-webhook/index.ts');
   const core = read('supabase/functions/_shared/unlock-core.mjs');
-  assert.match(webhook, /3 - Enviar comando ao veículo/);
+  const conversation = await import('../supabase/functions/_shared/conversation-core.mjs');
+  assert.doesNotMatch(webhook, /Como posso ajudar\?\s*\\n1 - Tirar uma dúvida/);
+  assert.equal(conversation.conversationalGreeting('Olá! Sou o assistente da Central Smart Risk.'), 'Olá! Sou o assistente da Central Smart Risk.\n\nComo posso ajudar?');
+  assert.equal(conversation.isAttendanceIntent('quero atendimento'), true);
+  assert.match(conversation.ATTENDANCE_OPTIONS, /Monitoramento/);
+  assert.match(conversation.driverDataAnswer({ full_name: 'Ygor', vehicle_plate: 'IKX4440' }, 'plate'), /IKX4440/);
   assert.match(webhook, /state: 'awaiting_command'/);
   assert.match(webhook, /state: 'post_command'/);
   assert.match(webhook, /state: 'closed'/);
   assert.match(core, /Precisa de ajuda com algo mais/);
+});
+
+test('WhatsApp waiting queue never assigns disconnected operators or expires immediately', () => {
+  const sql = read('supabase/032_reliable_whatsapp_queue_and_simulator.sql');
+  assert.match(sql, /s\.channel<>'whatsapp'/);
+  assert.match(sql, /p\.chat_available/);
+  assert.match(sql, /p\.chat_presence_at>now\(\)-interval '75 seconds'/);
+  assert.match(sql, /order by random\(\)/);
+  assert.doesNotMatch(sql, /p\.last_seen_at>now\(\)-interval '2 minutes'/);
+});
+
+test('internal command simulator validates its key and supports alert and unlock endpoints', () => {
+  const simulator = read('supabase/functions/tracking-simulator/index.ts');
+  const sql = read('supabase/032_reliable_whatsapp_queue_and_simulator.sql');
+  assert.match(simulator, /SIMULATOR_API_KEY/);
+  assert.match(simulator, /alerts\\\/active/);
+  assert.match(simulator, /commands\/unlock/);
+  assert.match(simulator, /SENT_TO_VEHICLE/);
+  assert.match(sql, /tracking_simulator_commands/);
 });
 
 test('operator replies are sent to WhatsApp and bot manuals are manageable', () => {

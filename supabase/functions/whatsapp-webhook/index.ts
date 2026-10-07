@@ -11,6 +11,18 @@ import {
   validateCpfCredential,
 } from '../_shared/unlock-core.mjs';
 import { sendGreenApiText } from '../_shared/green-api.ts';
+import {
+  ATTENDANCE_OPTIONS,
+  COMMAND_OPTIONS,
+  SCOPE_MESSAGE,
+  conversationalGreeting,
+  driverDataAnswer,
+  isAttendanceIntent,
+  isGreeting,
+  isTrackingQuestion,
+  normalizeConversationText,
+  requestedDriverData,
+} from '../_shared/conversation-core.mjs';
 
 const jsonHeaders = { 'Content-Type': 'application/json' };
 
@@ -64,16 +76,6 @@ const sendUnlockCommand = (requestRow: Record<string, any>) => simulatorRequest(
     source: 'SMART_CHAT',
   }),
 });
-
-function menu(driver: Record<string, any>) {
-  const data = [
-    `Nome: ${driver.full_name}`,
-    driver.carrier_name ? `Transportadora: ${driver.carrier_name}` : null,
-    driver.vehicle_plate ? `Placa: ${driver.vehicle_plate}` : null,
-    driver.technology ? `Tecnologia: ${driver.technology}` : null,
-  ].filter(Boolean).join('\n');
-  return `${data}\n\nComo posso ajudar?\n1 - Tirar uma dúvida\n2 - Falar com um operador\n3 - Enviar comando ao veículo\nDigite MENU a qualquer momento para voltar aqui.`;
-}
 
 async function updateContact(admin: any, contact: Record<string, any>, values: Record<string, any>) {
   const next = { ...values };
@@ -154,8 +156,8 @@ async function handleUnlockAuthentication(admin: any, contact: Record<string, an
   const { data: requestRow } = await admin.from('vehicle_unlock_requests').select('*')
     .eq('id', requestId).eq('whatsapp_contact_id', contact.id).maybeSingle();
   if (!requestRow || requestRow.status !== UNLOCK_STATES.AUTH_REQUIRED) {
-    await updateContact(admin, contact, { state: 'menu', context: { unlock_request_id: null, unlock_auth_attempts: 0 } });
-    await sendText(contact.wa_id, 'Esta solicitação não está mais disponível. Digite MENU para começar novamente.');
+    await updateContact(admin, contact, { state: 'conversation', context: { unlock_request_id: null, unlock_auth_attempts: 0 } });
+    await sendText(contact.wa_id, 'Esta solicitação não está mais disponível. Se precisar, peça o desbloqueio novamente.');
     return;
   }
 
@@ -236,14 +238,14 @@ async function handleUnlockConfirmation(admin: any, contact: Record<string, any>
   const { data: requestRow } = await admin.from('vehicle_unlock_requests').select('*')
     .eq('id', requestId).eq('whatsapp_contact_id', contact.id).maybeSingle();
   if (!requestRow || requestRow.status !== UNLOCK_STATES.AWAITING_CONFIRMATION) {
-    await updateContact(admin, contact, { state: 'menu', context: { unlock_request_id: null, unlock_auth_attempts: 0 } });
-    await sendText(contact.wa_id, 'Esta solicitação não está mais disponível. Digite MENU para começar novamente.');
+    await updateContact(admin, contact, { state: 'conversation', context: { unlock_request_id: null, unlock_auth_attempts: 0 } });
+    await sendText(contact.wa_id, 'Esta solicitação não está mais disponível. Se precisar, peça o desbloqueio novamente.');
     return;
   }
   const normalized = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
   if (normalized === '2' || normalized === 'nao' || normalized === 'cancelar') {
     await admin.from('vehicle_unlock_requests').update({ status: UNLOCK_STATES.COMPLETED, completed_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', requestRow.id);
-    await updateContact(admin, contact, { state: 'menu', context: { unlock_request_id: null, unlock_auth_attempts: 0 } });
+    await updateContact(admin, contact, { state: 'conversation', context: { unlock_request_id: null, unlock_auth_attempts: 0 } });
     await sendText(contact.wa_id, 'Solicitação de desbloqueio cancelada.');
     return;
   }
@@ -328,10 +330,10 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
     return;
   }
   if (contact.state === 'post_command') {
-    const answer = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+    const answer = normalizeConversationText(text);
     if (answer === '1' || answer === 'sim' || answer === 's') {
-      await updateContact(admin, contact, { state: 'menu' });
-      await sendText(contactKey, menu(driver));
+      await updateContact(admin, contact, { state: 'conversation' });
+      await sendText(contactKey, 'Claro. Como posso ajudar?');
       return;
     }
     if (answer === '2' || answer === 'nao' || answer === 'n') {
@@ -343,49 +345,44 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
     return;
   }
   if (contact.state === 'awaiting_command') {
-    const answer = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
-    if (answer === '0' || answer === 'voltar' || answer === 'menu') {
-      await updateContact(admin, contact, { state: 'menu' });
-      await sendText(contactKey, menu(driver));
+    const answer = normalizeConversationText(text);
+    if (answer === '0' || answer === 'voltar' || answer === 'cancelar') {
+      await updateContact(admin, contact, { state: 'conversation' });
+      await sendText(contactKey, 'Tudo bem. Como posso ajudar?');
       return;
     }
     if (answer === '1' || isUnlockIntent(text)) {
       await startUnlockFlow(admin, contact, driver, text);
       return;
     }
-    await sendText(contactKey, 'Qual comando deseja enviar?\n1 - Desbloqueio do veículo\n0 - Voltar ao menu');
+    await sendText(contactKey, COMMAND_OPTIONS);
     return;
   }
   if (isUnlockIntent(text)) {
     await startUnlockFlow(admin, contact, driver, text);
     return;
   }
-  if (!existingContact) {
-    await sendText(contactKey, `${settings.greeting}\n\n${menu(driver)}`);
-    return;
-  }
-
-  const normalized = text.toLocaleLowerCase('pt-BR');
+  const normalized = normalizeConversationText(text);
   if (contact.state === 'closed') {
-    await updateContact(admin, contact, { state: 'menu' });
-    await sendText(contactKey, `${settings.greeting}\n\n${menu(driver)}`);
+    await updateContact(admin, contact, { state: 'conversation' });
+    await sendText(contactKey, conversationalGreeting(settings.greeting));
     return;
   }
-  if (['menu', 'oi', 'olá', 'ola', 'início', 'inicio'].includes(normalized)) {
-    await updateContact(admin, contact, { state: 'menu', context: { unlock_request_id: null, unlock_auth_attempts: 0 } });
-    await sendText(contactKey, `${settings.greeting}\n\n${menu(driver)}`);
+  if (isGreeting(text)) {
+    await updateContact(admin, contact, { state: 'conversation', context: { unlock_request_id: null, unlock_auth_attempts: 0 } });
+    await sendText(contactKey, conversationalGreeting(settings.greeting));
     return;
   }
   if (contact.state === 'awaiting_service') {
-    if (normalized === '0') {
-      await updateContact(admin, contact, { state: 'menu' });
-      await sendText(contactKey, menu(driver));
+    if (normalized === '0' || normalized === 'voltar' || normalized === 'cancelar') {
+      await updateContact(admin, contact, { state: 'conversation' });
+      await sendText(contactKey, 'Tudo bem. Como posso ajudar?');
       return;
     }
     const serviceKind = normalized === '1' || normalized.includes('monitor') ? 'monitoring' :
       normalized === '2' || normalized.includes('check') ? 'checklist' : null;
     if (!serviceKind) {
-      await sendText(contactKey, 'Responda 1 para Monitoramento, 2 para Checklist ou 0 para voltar.');
+      await sendText(contactKey, 'Responda 1 para Monitoramento ou 2 para Checklist.');
       return;
     }
     const { data: routes, error } = await admin.rpc('route_whatsapp_chat', { contact_id: contact.id, service_kind: serviceKind });
@@ -393,19 +390,20 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
     await sendText(contactKey, routes?.[0]?.notice || 'Não foi possível iniciar o atendimento agora.');
     return;
   }
-  if (normalized === '2' || normalized.includes('operador') || normalized.includes('atendimento')) {
+  if (isAttendanceIntent(text)) {
     await updateContact(admin, contact, { state: 'awaiting_service' });
-    await sendText(contactKey, 'Qual atendimento você precisa?\n1 - Monitoramento\n2 - Checklist\n0 - Voltar ao menu');
+    await sendText(contactKey, ATTENDANCE_OPTIONS);
     return;
   }
-  if (normalized === '3' || normalized.includes('comando')) {
+  if (/\b(comando|enviar comando)\b/.test(normalized)) {
     await updateContact(admin, contact, { state: 'awaiting_command' });
-    await sendText(contactKey, 'Qual comando deseja enviar?\n1 - Desbloqueio do veículo\n0 - Voltar ao menu');
+    await sendText(contactKey, COMMAND_OPTIONS);
     return;
   }
-  if (normalized === '1') {
-    await updateContact(admin, contact, { state: 'question' });
-    await sendText(contactKey, 'Digite sua dúvida. Posso consultar os manuais cadastrados para sua tecnologia.');
+
+  const dataRequest = requestedDriverData(text);
+  if (dataRequest) {
+    await sendText(contactKey, driverDataAnswer(driver, dataRequest));
     return;
   }
 
@@ -413,11 +411,13 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
     question: text, driver_technology: driver.technology || null, result_limit: 2,
   });
   if (searchError) throw searchError;
-  if (answers?.length) {
-    const response = answers.map((answer: Record<string, any>) => `${answer.title}\n${answer.excerpt}`).join('\n\n');
-    await sendText(contactKey, `${response}\n\nSe ainda precisar de ajuda, digite ATENDIMENTO.`);
+  const minimumRank = isTrackingQuestion(text) ? 0.02 : 0.08;
+  const relevantAnswers = (answers || []).filter((answer: Record<string, any>) => Number(answer.rank || 0) >= minimumRank);
+  if (relevantAnswers.length) {
+    const response = relevantAnswers.map((answer: Record<string, any>) => answer.excerpt).join('\n\n');
+    await sendText(contactKey, `${response}\n\nIsso resolveu sua dúvida? Se precisar falar com a central, escreva ATENDIMENTO.`);
   } else {
-    await sendText(contactKey, settings.fallback_message);
+    await sendText(contactKey, isTrackingQuestion(text) ? settings.fallback_message : SCOPE_MESSAGE);
   }
 }
 
