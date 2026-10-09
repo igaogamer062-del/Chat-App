@@ -227,6 +227,38 @@ test('operator replies are sent to WhatsApp and bot manuals are manageable', () 
   assert.equal(fs.existsSync(path.join(root, 'supabase/functions/send-chat-push')), false);
 });
 
+test('manuals accept TXT, searchable PDF and Word DOCX', () => {
+  const panel = read('painel/app.js');
+  const sql = read('supabase/033_manual_search_and_whatsapp_media.sql');
+  assert.match(panel, /mammoth@1\.8\.0\/mammoth\.browser\.min\.js/);
+  assert.match(panel, /extractRawText/);
+  assert.match(panel, /\.docx,application\/vnd\.openxmlformats/);
+  assert.match(panel, /pdfjs-dist/);
+  assert.match(sql, /loose_query/);
+  assert.match(sql, /replace\(plainto_tsquery/);
+});
+
+test('keyboard help asks technology before searching the manuals', async () => {
+  const webhook = read('supabase/functions/whatsapp-webhook/index.ts');
+  const conversation = await import('../supabase/functions/_shared/conversation-core.mjs');
+  assert.equal(conversation.isKeyboardIntent('preciso de ajuda no teclado'), true);
+  assert.match(webhook, /awaiting_keyboard_technology/);
+  assert.match(webhook, /Qual é a tecnologia do rastreador/);
+  assert.match(webhook, /awaiting_keyboard_question/);
+  assert.match(webhook, /manual_technology/);
+});
+
+test('WhatsApp media and live location are stored in the operator conversation and history', () => {
+  const webhook = read('supabase/functions/whatsapp-webhook/index.ts');
+  const renderer = read('js/checklist-media.js');
+  assert.match(webhook, /locationMessageData/);
+  assert.match(webhook, /fileMessageData/);
+  assert.match(webhook, /checklist-chat-files/);
+  assert.match(webhook, /attachment,/);
+  assert.match(renderer, /attachment\.kind==='location'/);
+  assert.match(renderer, /google\.com\/maps/);
+});
+
 test('future bot engine remains an isolated inactive prototype', () => {
   const engine = read('motor-bot/index.html');
   assert.match(engine, /Ambiente inativo/);

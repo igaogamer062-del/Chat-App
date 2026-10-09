@@ -6,7 +6,7 @@ const cors = {
   'Access-Control-Allow-Methods': 'POST,OPTIONS',
 };
 const reply = (value: unknown, status = 200) => Response.json(value, { status, headers: cors });
-const allowed = /^(image\/(jpeg|png|webp|gif)|audio\/(webm|ogg|mpeg|mp4|wav|x-wav)|video\/(mp4|webm|quicktime)|application\/pdf)$/;
+const allowed = /^(image\/(jpeg|png|webp|gif)|audio\/(webm|ogg|mpeg|mp4|wav|x-wav|aac|opus)|video\/(mp4|webm|quicktime)|application\/pdf)$/;
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });

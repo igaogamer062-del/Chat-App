@@ -634,7 +634,21 @@
   // ============================================================
   // BOT DO WHATSAPP E BASE DE CONHECIMENTO
   // ============================================================
+  let mammothLoader;
+  async function loadMammoth() {
+    if (window.mammoth) return window.mammoth;
+    if (!mammothLoader) mammothLoader = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js';
+      script.onload = () => resolve(window.mammoth);
+      script.onerror = () => reject(new Error('Não foi possível carregar o leitor de arquivos Word.'));
+      document.head.append(script);
+    });
+    return mammothLoader;
+  }
+
   async function manualTextFromFile(file) {
+    const fileName = file.name.toLowerCase();
     if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
       const pdfjs = await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs');
       pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs';
@@ -647,6 +661,12 @@
       }
       return pages.join('\n\n').replace(/\s+/g, ' ').trim();
     }
+    if (fileName.endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      const mammoth = await loadMammoth();
+      const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
+      return String(result.value || '').replace(/\n{3,}/g, '\n\n').trim();
+    }
+    if (fileName.endsWith('.doc')) throw new Error('Salve o arquivo do Word no formato .docx antes de enviar.');
     return (await file.text()).trim();
   }
 
@@ -670,10 +690,10 @@
       '<div class="bot-flow"><b>Fluxo operacional</b><span>Mensagem → identificação pelo telefone → consulta aos manuais ou transferência → operador da base correta.</span></div>' +
       '<p class="card-subtitle">URL da API, ID da instância, token da instância e token do webhook ficam somente nos Secrets das Edge Functions.</p></section>' +
       '</div>' +
-      '<section class="card" style="margin-top:16px"><div class="manual-head"><div><h2>Manuais das tecnologias</h2><p class="card-subtitle">Aceita TXT e PDF com texto selecionável. O bot pesquisa o conteúdo antes de oferecer atendimento humano.</p></div></div>' +
+      '<section class="card" style="margin-top:16px"><div class="manual-head"><div><h2>Manuais das tecnologias</h2><p class="card-subtitle">Aceita TXT, PDF com texto selecionável e Word no formato DOCX. O bot pesquisa o conteúdo antes de oferecer atendimento humano.</p></div></div>' +
       '<div class="manual-form"><div class="form-row"><label>Título</label><input id="manual-title" placeholder="Ex.: Manual Omnilink"></div>' +
       '<div class="form-row"><label>Tecnologia</label><input id="manual-technology" placeholder="Ex.: Omnilink"></div>' +
-      '<div class="form-row"><label>Arquivo</label><input id="manual-file" type="file" accept=".txt,text/plain,.pdf,application/pdf"></div>' +
+      '<div class="form-row"><label>Arquivo</label><input id="manual-file" type="file" accept=".txt,text/plain,.pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></div>' +
       '<button class="btn primary" id="add-manual">Adicionar manual</button></div>' +
       '<div class="history-table-wrap"><table><thead><tr><th>Manual</th><th>Tecnologia</th><th>Arquivo</th><th>Adicionado</th><th></th></tr></thead><tbody>' +
       (manuals.length ? manuals.map((manual) => '<tr><td>' + esc(manual.title) + '</td><td>' + esc(manual.technology || 'Todas') + '</td><td>' + esc(manual.file_name || '—') + '</td><td>' + new Date(manual.created_at).toLocaleDateString('pt-BR') + '</td><td><button class="btn small danger" data-delete-manual="' + manual.id + '">Excluir</button></td></tr>').join('') : '<tr><td colspan="5"><div class="empty-state">Nenhum manual cadastrado.</div></td></tr>') +
@@ -700,7 +720,7 @@
       const button = $('add-manual'); button.disabled = true; button.textContent = 'Processando…';
       try {
         const content = await manualTextFromFile(file);
-        if (content.length < 20) throw new Error('O arquivo não possui texto suficiente ou o PDF é apenas uma imagem.');
+        if (content.length < 20) throw new Error('O arquivo não possui texto suficiente. PDFs digitalizados como imagem precisam de OCR antes do envio.');
         if (content.length > 1000000) throw new Error('O manual ultrapassa o limite de 1 milhão de caracteres.');
         await call(sb.from('bot_manuals').insert({
           title,

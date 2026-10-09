@@ -16,6 +16,16 @@ export function isAttendanceIntent(value) {
   return /\b(atendimento|atendente|operador|falar com (a )?central|falar com alguem|suporte humano)\b/.test(text);
 }
 
+export function isHelpIntent(value) {
+  const text = normalizeConversationText(value);
+  return /\b(duvida|duvidas|ajuda|orientacao|orientar|como funciona)\b/.test(text);
+}
+
+export function isKeyboardIntent(value) {
+  const text = normalizeConversationText(value);
+  return /\b(teclado|terminal|display|tela|mensagem no equipamento)\b/.test(text);
+}
+
 export function requestedDriverData(value) {
   const text = normalizeConversationText(value);
   if (/\b(meus dados|meu cadastro|dados cadastrados|dados do motorista|dados do condutor)\b/.test(text)) return 'all';
@@ -44,7 +54,7 @@ export function driverDataAnswer(driver, request) {
     : values[request] || '';
 }
 
-const TRACKING_TERMS = /\b(rastreamento|rastreador|tecnologia|macro|macros|sinal|gps|satelite|telemetria|terminal|teclado|omnilink|sascar|autotrac|onixsat|positron|bloqueio|bloqueado|desbloqueio|desbloquear|veiculo|caminhao|placa|panico|botao de panico|isca|sensor|ignicao|comando|monitoramento|checklist)\b/;
+const TRACKING_TERMS = /\b(rastreamento|rastreador|tecnologia|macro|macros|sinal|gps|satelite|telemetria|terminal|teclado|display|tela|inicio de viagem|fim de viagem|omnilink|sascar|autotrac|onixsat|positron|bloqueio|bloqueado|desbloqueio|desbloquear|veiculo|caminhao|placa|panico|botao de panico|isca|sensor|ignicao|comando|monitoramento|checklist)\b/;
 
 export function isTrackingQuestion(value) {
   return TRACKING_TERMS.test(normalizeConversationText(value));
@@ -58,6 +68,8 @@ export function conversationalGreeting(configuredGreeting) {
 }
 
 export const SCOPE_MESSAGE = 'Posso ajudar com rastreamento, tecnologia embarcada, macros, bloqueio e desbloqueio, checklist e atendimento operacional. Me conte o que aconteceu com o veículo.';
+
+export const HELP_MESSAGE = 'Posso ajudar com rastreamento, teclado, macros, tecnologia embarcada, bloqueio e desbloqueio. Em que posso ajudar?';
 
 export const ATTENDANCE_OPTIONS = 'Certo. Qual tipo de atendimento você precisa?\n\n1 - Monitoramento\n2 - Checklist';
 

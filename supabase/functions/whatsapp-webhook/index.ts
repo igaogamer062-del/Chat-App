@@ -14,17 +14,22 @@ import { sendGreenApiText } from '../_shared/green-api.ts';
 import {
   ATTENDANCE_OPTIONS,
   COMMAND_OPTIONS,
+  HELP_MESSAGE,
   SCOPE_MESSAGE,
   conversationalGreeting,
   driverDataAnswer,
   isAttendanceIntent,
   isGreeting,
+  isHelpIntent,
+  isKeyboardIntent,
   isTrackingQuestion,
   normalizeConversationText,
   requestedDriverData,
 } from '../_shared/conversation-core.mjs';
 
 const jsonHeaders = { 'Content-Type': 'application/json' };
+const allowedInboundMedia = /^(image\/(jpeg|png|webp|gif)|audio\/(webm|ogg|mpeg|mp4|wav|x-wav|aac|opus)|video\/(mp4|webm|quicktime)|application\/pdf)$/;
+const maxInboundMediaSize = 25 * 1024 * 1024;
 
 function digits(value: unknown) {
   return String(value || '').replace(/\D/g, '');
@@ -36,14 +41,84 @@ function inboundText(payload: Record<string, any>) {
     payload.messageData?.extendedTextMessageData?.text ||
     payload.messageData?.buttonsResponseMessage?.selectedButtonId ||
     payload.messageData?.listResponseMessage?.singleSelectReply?.selectedRowId ||
+    payload.messageData?.fileMessageData?.caption ||
     payload.text?.message || payload.buttonsResponseMessage?.message ||
     payload.buttonsResponseMessage?.buttonId || payload.listResponseMessage?.title ||
     payload.listResponseMessage?.message || payload.listResponseMessage?.selectedRowId || '',
   ).trim();
 }
 
+function inboundAttachment(payload: Record<string, any>) {
+  const location = payload.messageData?.locationMessageData;
+  if (location && Number.isFinite(Number(location.latitude)) && Number.isFinite(Number(location.longitude))) {
+    return {
+      kind: 'location',
+      name: String(location.nameLocation || location.name || 'Localização em tempo real'),
+      address: String(location.address || ''),
+      latitude: Number(location.latitude),
+      longitude: Number(location.longitude),
+    };
+  }
+  const file = payload.messageData?.fileMessageData;
+  if (!file?.downloadUrl) return null;
+  const messageType = String(payload.messageData?.typeMessage || payload.typeMessage || '').toLowerCase();
+  const fallbackType = messageType.includes('image') ? 'image/jpeg'
+    : messageType.includes('video') ? 'video/mp4'
+    : messageType.includes('audio') ? 'audio/ogg'
+    : 'application/octet-stream';
+  return {
+    kind: 'file',
+    downloadUrl: String(file.downloadUrl),
+    name: String(file.fileName || (messageType.includes('audio') ? 'Áudio do WhatsApp' : 'Arquivo do WhatsApp')),
+    type: String(file.mimeType || fallbackType).split(';')[0].toLowerCase(),
+  };
+}
+
+async function saveInboundAttachment(admin: any, sessionId: string, messageId: string, incoming: Record<string, any>) {
+  if (incoming.kind === 'location') return { ...incoming, source: 'whatsapp' };
+  if (incoming.kind !== 'file' || !allowedInboundMedia.test(incoming.type)) throw new Error('Formato de mídia não permitido');
+  const url = new URL(incoming.downloadUrl);
+  if (url.protocol !== 'https:') throw new Error('Endereço de mídia inválido');
+  const response = await fetch(url, { redirect: 'follow' });
+  if (!response.ok) throw new Error(`Não foi possível baixar a mídia (${response.status})`);
+  const declaredSize = Number(response.headers.get('content-length') || 0);
+  if (declaredSize > maxInboundMediaSize) throw new Error('A mídia ultrapassa 25 MB');
+  const blob = await response.blob();
+  if (!blob.size || blob.size > maxInboundMediaSize) throw new Error('A mídia está vazia ou ultrapassa 25 MB');
+  const responseType = String(response.headers.get('content-type') || '').split(';')[0].toLowerCase();
+  const type = allowedInboundMedia.test(responseType) ? responseType : incoming.type;
+  const safeName = incoming.name.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(-100) || 'midia';
+  const path = `${sessionId}/whatsapp-${messageId.replace(/[^a-zA-Z0-9_-]/g, '')}-${safeName}`;
+  const saved = await admin.storage.from('checklist-chat-files').upload(path, blob, { contentType: type, upsert: false });
+  if (saved.error) throw saved.error;
+  return { id: crypto.randomUUID(), name: incoming.name, type, size: blob.size, path, source: 'whatsapp' };
+}
+
+function attachmentLabel(incoming: Record<string, any> | null) {
+  if (!incoming) return '';
+  if (incoming.kind === 'location') return 'Localização em tempo real enviada pelo condutor.';
+  if (incoming.type?.startsWith('image/')) return 'Imagem enviada pelo condutor.';
+  if (incoming.type?.startsWith('video/')) return 'Vídeo enviado pelo condutor.';
+  if (incoming.type?.startsWith('audio/')) return 'Áudio enviado pelo condutor.';
+  return 'Arquivo enviado pelo condutor.';
+}
+
 async function sendText(to: string, body: string) {
   return sendGreenApiText(to, body);
+}
+
+async function manualAnswer(admin: any, question: string, technology: string | null, strictTechnology = false) {
+  const { data: answers, error } = await admin.rpc('search_bot_manuals', {
+    question, driver_technology: technology || null, result_limit: 2,
+  });
+  if (error) throw error;
+  const minimumRank = strictTechnology ? 0 : (isTrackingQuestion(question) ? 0.00001 : 0.08);
+  const relevant = (answers || []).filter((answer: Record<string, any>) => Number(answer.rank || 0) > minimumRank);
+  if (!relevant.length) return null;
+  return relevant.map((answer: Record<string, any>) => {
+    const source = answer.title ? `Segundo o manual “${answer.title}”:` : 'Segundo o manual:';
+    return `${source}\n${String(answer.excerpt || '').replace(/<\/?b>/gi, '').replace(/\s+/g, ' ').trim()}`;
+  }).join('\n\n');
 }
 
 function simulatorCredentials() {
@@ -263,8 +338,9 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
   const lookupPhone = digits(rawChatId);
   const contactKey = lookupPhone;
   const text = inboundText(payload);
+  const incomingAttachment = inboundAttachment(payload);
   const messageId = String(payload.idMessage || '').trim();
-  if (!contactKey || !messageId || !text) return;
+  if (!contactKey || !messageId || (!text && !incomingAttachment)) return;
 
   const { data: existingContact } = await admin.from('whatsapp_contacts').select('*').eq('wa_id', contactKey).maybeSingle();
   const protectedCredential = existingContact?.state === 'unlock_auth';
@@ -316,8 +392,28 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
     .eq('whatsapp_contact_id', contact.id).eq('active', true).order('created_at', { ascending: false }).limit(1);
   const openSession = openSessions?.[0];
   if (openSession) {
-    await admin.from('checklist_chat_messages_v2').insert({ session_id: openSession.id, sender_type: 'driver', body: text });
+    let attachment = null;
+    let body = text || attachmentLabel(incomingAttachment);
+    if (incomingAttachment) {
+      try {
+        attachment = await saveInboundAttachment(admin, openSession.id, messageId, incomingAttachment);
+      } catch (error) {
+        console.error('Falha ao salvar mídia do WhatsApp', error);
+        body = `${body || 'Mídia enviada pelo condutor.'}\n\nNão foi possível armazenar este anexo.`;
+      }
+    }
+    await admin.from('checklist_chat_messages_v2').insert({
+      session_id: openSession.id,
+      sender_type: 'driver',
+      body,
+      attachment,
+    });
     await admin.from('checklist_chat_sessions').update({ updated_at: new Date().toISOString() }).eq('id', openSession.id);
+    return;
+  }
+
+  if (incomingAttachment && !text) {
+    await sendText(contactKey, 'Para enviar localização, imagem, vídeo ou áudio ao operador, primeiro solicite ATENDIMENTO.');
     return;
   }
 
@@ -344,6 +440,55 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
     await sendText(contactKey, 'Responda 1 para SIM ou 2 para NÃO.');
     return;
   }
+  if (isUnlockIntent(text)) {
+    await startUnlockFlow(admin, contact, driver, text);
+    return;
+  }
+  if (['awaiting_keyboard_technology', 'awaiting_keyboard_question', 'awaiting_help_topic'].includes(contact.state) && isAttendanceIntent(text)) {
+    await updateContact(admin, contact, { state: 'awaiting_service', context: { manual_technology: null } });
+    await sendText(contactKey, ATTENDANCE_OPTIONS);
+    return;
+  }
+  if (contact.state === 'awaiting_keyboard_technology') {
+    const technology = text.trim().slice(0, 100);
+    if (technology.length < 2) {
+      await sendText(contactKey, 'Qual é a tecnologia do rastreador?');
+      return;
+    }
+    await updateContact(admin, contact, {
+      state: 'awaiting_keyboard_question',
+      context: { manual_technology: technology },
+    });
+    await sendText(contactKey, `Certo. Em que posso ajudar sobre o teclado da tecnologia ${technology}?`);
+    return;
+  }
+  if (contact.state === 'awaiting_keyboard_question') {
+    if (text.trim().length < 3) {
+      await sendText(contactKey, 'Descreva sua dúvida sobre o teclado para eu consultar o manual.');
+      return;
+    }
+    const technology = String(contact.context?.manual_technology || driver.technology || '').trim();
+    const response = await manualAnswer(admin, text, technology || null, true);
+    await updateContact(admin, contact, { state: 'conversation', context: { manual_technology: null } });
+    if (response) {
+      await sendText(contactKey, `${response}\n\nIsso resolveu sua dúvida?`);
+    } else {
+      await sendText(contactKey, `Não possuo essa informação nos manuais cadastrados para a tecnologia ${technology || 'informada'}. Se precisar falar com a central, escreva ATENDIMENTO.`);
+    }
+    return;
+  }
+  if (contact.state === 'awaiting_help_topic') {
+    if (isKeyboardIntent(text)) {
+      await updateContact(admin, contact, { state: 'awaiting_keyboard_technology' });
+      await sendText(contactKey, 'Qual é a tecnologia do rastreador?');
+      return;
+    }
+    const response = await manualAnswer(admin, text, driver.technology || null);
+    await updateContact(admin, contact, { state: 'conversation' });
+    if (response) await sendText(contactKey, `${response}\n\nIsso resolveu sua dúvida?`);
+    else await sendText(contactKey, 'Não possuo essa informação nos manuais cadastrados. Se precisar falar com a central, escreva ATENDIMENTO.');
+    return;
+  }
   if (contact.state === 'awaiting_command') {
     const answer = normalizeConversationText(text);
     if (answer === '0' || answer === 'voltar' || answer === 'cancelar') {
@@ -356,10 +501,6 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
       return;
     }
     await sendText(contactKey, COMMAND_OPTIONS);
-    return;
-  }
-  if (isUnlockIntent(text)) {
-    await startUnlockFlow(admin, contact, driver, text);
     return;
   }
   const normalized = normalizeConversationText(text);
@@ -407,14 +548,20 @@ async function handleMessage(admin: any, payload: Record<string, any>) {
     return;
   }
 
-  const { data: answers, error: searchError } = await admin.rpc('search_bot_manuals', {
-    question: text, driver_technology: driver.technology || null, result_limit: 2,
-  });
-  if (searchError) throw searchError;
-  const minimumRank = isTrackingQuestion(text) ? 0.02 : 0.08;
-  const relevantAnswers = (answers || []).filter((answer: Record<string, any>) => Number(answer.rank || 0) >= minimumRank);
-  if (relevantAnswers.length) {
-    const response = relevantAnswers.map((answer: Record<string, any>) => answer.excerpt).join('\n\n');
+  if (isKeyboardIntent(text)) {
+    await updateContact(admin, contact, { state: 'awaiting_keyboard_technology' });
+    await sendText(contactKey, 'Qual é a tecnologia do rastreador?');
+    return;
+  }
+
+  if (isHelpIntent(text)) {
+    await updateContact(admin, contact, { state: 'awaiting_help_topic' });
+    await sendText(contactKey, HELP_MESSAGE);
+    return;
+  }
+
+  const response = await manualAnswer(admin, text, driver.technology || null);
+  if (response) {
     await sendText(contactKey, `${response}\n\nIsso resolveu sua dúvida? Se precisar falar com a central, escreva ATENDIMENTO.`);
   } else {
     await sendText(contactKey, isTrackingQuestion(text) ? settings.fallback_message : SCOPE_MESSAGE);
