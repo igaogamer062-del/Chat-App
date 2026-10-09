@@ -109,16 +109,22 @@ async function sendText(to: string, body: string) {
 
 async function manualAnswer(admin: any, question: string, technology: string | null, strictTechnology = false) {
   const { data: answers, error } = await admin.rpc('search_bot_manuals', {
-    question, driver_technology: technology || null, result_limit: 2,
+    question, driver_technology: technology || null, result_limit: 1,
   });
   if (error) throw error;
   const minimumRank = strictTechnology ? 0 : (isTrackingQuestion(question) ? 0.00001 : 0.08);
   const relevant = (answers || []).filter((answer: Record<string, any>) => Number(answer.rank || 0) > minimumRank);
   if (!relevant.length) return null;
-  return relevant.map((answer: Record<string, any>) => {
-    const source = answer.title ? `Segundo o manual “${answer.title}”:` : 'Segundo o manual:';
-    return `${source}\n${String(answer.excerpt || '').replace(/<\/?b>/gi, '').replace(/\s+/g, ' ').trim()}`;
-  }).join('\n\n');
+  const answer = relevant[0];
+  const source = technology
+    ? `Com base no manual da tecnologia ${technology}:`
+    : answer.title ? `Com base no manual “${answer.title}”:` : 'Com base no manual:';
+  const excerpt = String(answer.excerpt || '')
+    .replace(/<\/?b>/gi, '')
+    .replace(/\.{3,}/g, '. ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `${source}\n${excerpt}`;
 }
 
 function simulatorCredentials() {

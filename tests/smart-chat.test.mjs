@@ -229,13 +229,17 @@ test('operator replies are sent to WhatsApp and bot manuals are manageable', () 
 
 test('manuals accept TXT, searchable PDF and Word DOCX', () => {
   const panel = read('painel/app.js');
-  const sql = read('supabase/033_manual_search_and_whatsapp_media.sql');
+  const sql = read('supabase/034_preindexed_manual_chunks.sql');
   assert.match(panel, /mammoth@1\.8\.0\/mammoth\.browser\.min\.js/);
   assert.match(panel, /extractRawText/);
   assert.match(panel, /\.docx,application\/vnd\.openxmlformats/);
   assert.match(panel, /pdfjs-dist/);
   assert.match(sql, /loose_query/);
   assert.match(sql, /replace\(plainto_tsquery/);
+  assert.match(sql, /bot_manual_chunks/);
+  assert.match(sql, /bot_manual_index_after_write/);
+  assert.match(sql, /MaxFragments=1,MaxWords=34/);
+  assert.match(read('supabase/functions/whatsapp-webhook/index.ts'), /result_limit: 1/);
 });
 
 test('keyboard help asks technology before searching the manuals', async () => {

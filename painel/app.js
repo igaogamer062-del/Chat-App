@@ -728,7 +728,7 @@
           file_name: file.name,
           content,
           created_by: me.id,
-        }), 'Manual adicionado ao bot.');
+        }), 'Manual analisado e adicionado à base de conhecimento.');
         renderBot();
       } catch (error) { toast(error.message || 'Não foi possível processar o manual.'); }
       finally { if (document.body.contains(button)) { button.disabled = false; button.textContent = 'Adicionar manual'; } }
